@@ -1,0 +1,33 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "java",
+            "name": "GestureGameScreen",
+            "request": "launch",
+            "mainClass": "io.github.ZaneStyx.Screen.GestureGameScreen",
+            "projectName": "core"
+        },
+        {
+            "type": "java",
+            "name": "GestureGameLauncher",
+            "request": "launch",
+            "mainClass": "io.github.ZaneStyx.GestureGameLauncher",
+            "projectName": "core"
+        },
+        {
+            "type": "java",
+            "name": "Lwjgl3Launcher",
+            "request": "launch",
+            "mainClass": "io.github.ZaneStyx.lwjgl3.Lwjgl3Launcher",
+            "projectName": "lwjgl3"
+        },
+        {
+            "type": "java",
+            "name": "Run OpenCV",
+            "request": "launch",
+            "mainClass": "Main",
+            "vmArgs": "-Djava.library.path=native"
+        }
+    ]
+}

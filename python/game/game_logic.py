@@ -81,13 +81,26 @@ class GestureMemoryGame:
                 'mistake': bool,  # Made a mistake
             }
         """
+            if len(self.player_input) >= len(self.sequence):
+                return {
+                    'valid': False,
+                    'complete': True,
+                    'correct_so_far': True,
+                    'progress': (len(self.player_input), len(self.sequence)),
+                    'expected': None,
+                    'mistake': False,
+                }
+
         if gesture_id is None or not (1 <= gesture_id <= 4):
+                expected = None
+                if len(self.player_input) < len(self.sequence):
+                    expected = self.sequence[len(self.player_input)]
             return {
                 'valid': False,
                 'complete': False,
                 'correct_so_far': True,
                 'progress': (len(self.player_input), len(self.sequence)),
-                'expected': self.sequence[len(self.player_input)],
+                    'expected': expected,
                 'mistake': False,
             }
         

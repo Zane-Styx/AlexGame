@@ -9,6 +9,7 @@ import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.scenes.scene2d.Stage;
+import com.badlogic.gdx.scenes.scene2d.ui.Image;
 import com.badlogic.gdx.scenes.scene2d.ui.ImageButton;
 import com.badlogic.gdx.scenes.scene2d.ui.Skin;
 import com.badlogic.gdx.scenes.scene2d.ui.Table;
@@ -33,7 +34,15 @@ public class GameOneScreen implements Screen {
     private volatile boolean running;
     private volatile String latestFrameBase64;
     private Texture cameraTexture;
+    private Texture gameUiTexture;
+    private Image gameUiImage;
+    private Table uiPanel;
     private final JsonReader jsonReader = new JsonReader();
+    private static final float UI_PANEL_WIDTH = 512f;
+    private static final float UI_PANEL_HEIGHT = 768f;
+    private static final float UI_PANEL_LEFT_PADDING = 768f;
+    private static final float EXIT_BUTTON_WIDTH = 186f;
+    private static final float EXIT_BUTTON_HEIGHT = 56f;
     private volatile boolean gameLogicReady;
     private volatile String gameStatusMessage = "Starting Python game logic...";
     private volatile String gameSequenceText = "";
@@ -51,12 +60,19 @@ public class GameOneScreen implements Screen {
         Gdx.input.setInputProcessor(stage);
         skin = Assets.manager.get("ui/uiskin.json", Skin.class);
 
-        Table root = new Table();
-        root.setFillParent(true);
-        root.top().left().pad(20f);
+        gameUiTexture = Assets.manager.get("ui/game/game_one_ui.png", Texture.class);
+        gameUiImage = new Image(gameUiTexture);
+        stage.addActor(gameUiImage);
+
+        uiPanel = new Table();
+        uiPanel.setSize(UI_PANEL_WIDTH, UI_PANEL_HEIGHT);
+        uiPanel.setPosition(UI_PANEL_LEFT_PADDING, 0f);
+        uiPanel.bottom().center();
         ImageButton backButton = createBackButton();
-        root.add(backButton).width(210f).height(230f);
-        stage.addActor(root);
+        uiPanel.add(backButton).width(EXIT_BUTTON_WIDTH).height(EXIT_BUTTON_HEIGHT).padBottom(24f);
+        stage.addActor(uiPanel);
+
+        updateGameUiLayout();
 
         PythonBackendManager.startServer();
         pythonClient = new PythonBridgeClient("127.0.0.1", 9009);
@@ -70,18 +86,19 @@ public class GameOneScreen implements Screen {
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
         updateCameraTexture();
+        updateGameUiLayout();
 
         batch.begin();
         if (cameraTexture != null) {
-            float scale = Math.min(
-                (float) Gdx.graphics.getWidth() / cameraTexture.getWidth(),
-                (float) Gdx.graphics.getHeight() / cameraTexture.getHeight()
-            );
-            float width = cameraTexture.getWidth() * scale;
-            float height = cameraTexture.getHeight() * scale;
-            float x = (Gdx.graphics.getWidth() - width) / 2f;
-            float y = (Gdx.graphics.getHeight() - height) / 2f;
-            batch.draw(cameraTexture, x, y, width, height);
+            float targetSize = 704f;
+            float x = 32f;
+            float y = Gdx.graphics.getHeight() - 32f - targetSize;
+            int srcW = cameraTexture.getWidth();
+            int srcH = cameraTexture.getHeight();
+            int cropSize = Math.min(srcW, srcH);
+            int srcX = (srcW - cropSize) / 2;
+            int srcY = (srcH - cropSize) / 2;
+            batch.draw(cameraTexture, x, y, targetSize, targetSize, srcX, srcY, cropSize, cropSize, false, false);
         } else {
             font.draw(batch, "Waiting for Python camera feed...", 20, Gdx.graphics.getHeight() - 20);
         }
@@ -105,6 +122,10 @@ public class GameOneScreen implements Screen {
 
     @Override
     public void resize(int width, int height) {
+        if (stage != null) {
+            stage.getViewport().update(width, height, true);
+        }
+        updateGameUiLayout();
     }
 
     @Override
@@ -158,7 +179,7 @@ public class GameOneScreen implements Screen {
             while (running) {
                 try {
                     pythonClient.connect(2000);
-                    String response = pythonClient.sendRequest("get_frame", "{\"camera_id\":0,\"quality\":70}");
+                    String response = pythonClient.sendRequest("get_frame", "{\"camera_id\":0,\"quality\":70,\"draw_skeleton\":true}");
                     JsonValue json = jsonReader.parse(response);
                     if (json != null && json.getBoolean("ok", false)) {
                         JsonValue data = json.get("data");
@@ -324,4 +345,20 @@ public class GameOneScreen implements Screen {
         }
     }
 
+    private void updateGameUiLayout() {
+        if (gameUiImage == null) {
+            return;
+        }
+        float width = Gdx.graphics.getWidth();
+        float height = Gdx.graphics.getHeight();
+        gameUiImage.setSize(width, height);
+        gameUiImage.setPosition(0f, 0f);
+        gameUiImage.setZIndex(0);
+
+        if (uiPanel != null) {
+            float panelY = Math.max(0f, (height - UI_PANEL_HEIGHT) / 2f);
+            uiPanel.setSize(UI_PANEL_WIDTH, UI_PANEL_HEIGHT);
+            uiPanel.setPosition(UI_PANEL_LEFT_PADDING, panelY);
+        }
+    }
 }

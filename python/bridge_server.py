@@ -123,6 +123,7 @@ class JsonLineHandler(socketserver.StreamRequestHandler):
 
         camera_id = int(payload.get("camera_id", 0))
         jpeg_quality = int(payload.get("quality", 70))
+        draw_skeleton = bool(payload.get("draw_skeleton", False))
 
         frame = None
         hand_landmarks = None
@@ -159,6 +160,9 @@ class JsonLineHandler(socketserver.StreamRequestHandler):
                     "confidence": float(result.confidence),
                     "is_valid": bool(result.is_valid),
                 }
+
+        if draw_skeleton and hand_landmarks is not None:
+            _draw_hand_skeleton(frame, hand_landmarks)
 
         try:
             encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]

@@ -3,6 +3,7 @@ import json
 import os
 import socketserver
 import threading
+import time
 from typing import Any, Dict, Optional
 
 try:
@@ -122,8 +123,10 @@ class JsonLineHandler(socketserver.StreamRequestHandler):
             return {"ok": False, "error": "opencv_not_available"}
 
         camera_id = int(payload.get("camera_id", 0))
-        jpeg_quality = int(payload.get("quality", 70))
+        jpeg_quality = int(payload.get("quality", 35))
         draw_skeleton = bool(payload.get("draw_skeleton", False))
+        max_width = int(payload.get("max_width", 320) or 320)
+        max_height = int(payload.get("max_height", 240) or 240)
 
         frame = None
         hand_landmarks = None
@@ -136,9 +139,14 @@ class JsonLineHandler(socketserver.StreamRequestHandler):
                 global _camera
                 if _camera is None or not _camera.isOpened():
                     _camera = cv2.VideoCapture(camera_id)
-                    _camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                    _camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                    _camera.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+                    _camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
                     _camera.set(cv2.CAP_PROP_FPS, 30)
+                    _camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    try:
+                        _camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                    except Exception:
+                        pass
 
                 if _camera is None or not _camera.isOpened():
                     return {"ok": False, "error": "camera_open_failed"}
@@ -148,6 +156,7 @@ class JsonLineHandler(socketserver.StreamRequestHandler):
                     return {"ok": False, "error": "camera_read_failed"}
 
         gesture_payload = {}
+        hand_landmarks_payload = []
         if hand_landmarks is not None and GestureRecognizer is not None:
             with _gesture_lock:
                 global _gesture_recognizer
@@ -160,9 +169,24 @@ class JsonLineHandler(socketserver.StreamRequestHandler):
                     "confidence": float(result.confidence),
                     "is_valid": bool(result.is_valid),
                 }
+            # Convert landmarks to normalized coordinates
+            height, width = frame.shape[:2]
+            for lm in hand_landmarks:
+                hand_landmarks_payload.append([float(lm[0]), float(lm[1])])
 
         if draw_skeleton and hand_landmarks is not None:
             _draw_hand_skeleton(frame, hand_landmarks)
+
+        # Optional downscale for faster encoding/transfer
+        if max_width > 0 or max_height > 0:
+            height, width = frame.shape[:2]
+            target_w = max_width if max_width > 0 else width
+            target_h = max_height if max_height > 0 else height
+            scale = min(target_w / width, target_h / height)
+            if scale > 0 and scale < 1:
+                new_w = max(1, int(width * scale))
+                new_h = max(1, int(height * scale))
+                frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
         try:
             encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
@@ -178,6 +202,7 @@ class JsonLineHandler(socketserver.StreamRequestHandler):
                     "width": int(frame.shape[1]),
                     "height": int(frame.shape[0]),
                     "gesture": gesture_payload,
+                    "hand_landmarks": hand_landmarks_payload,
                 },
             }
         except Exception as exc:
@@ -340,11 +365,16 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
 
 
-def run(host: str = "127.0.0.1", port: int = 9009) -> None:
+def run(host: str = "0.0.0.0", port: int = 9009) -> None:
     with ThreadedTCPServer((host, port), JsonLineHandler) as server:
         _start_debug_view_if_enabled()
-        print(f"[python-bridge] listening on {host}:{port}")
-        server.serve_forever()
+        print(f"[python-bridge] listening on {host}:{port} (threaded)")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("\n[PythonBridge] Shutting down...")
+            global _debug_running
+            _debug_running = False
 
 
 if __name__ == "__main__":

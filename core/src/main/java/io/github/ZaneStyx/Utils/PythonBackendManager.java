@@ -38,7 +38,7 @@ public final class PythonBackendManager {
                     serverScript.getAbsolutePath()
                 );
                 builder.directory(projectRoot);
-                builder.environment().put("PYTHON_DEBUG_VIEW", "1");
+                builder.environment().put("PYTHON_DEBUG_VIEW", "0");
                 builder.redirectErrorStream(true);
                 pythonServerProcess = builder.start();
                 lastStartError = null;

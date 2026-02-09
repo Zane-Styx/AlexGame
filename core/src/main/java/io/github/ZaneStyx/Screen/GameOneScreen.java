@@ -33,6 +33,7 @@ public class GameOneScreen implements Screen {
     private Thread frameThread;
     private volatile boolean running;
     private volatile String latestFrameBase64;
+    private String processedFrameBase64;
     private Texture cameraTexture;
     private Texture gameUiTexture;
     private Image gameUiImage;
@@ -179,7 +180,7 @@ public class GameOneScreen implements Screen {
             while (running) {
                 try {
                     pythonClient.connect(2000);
-                    String response = pythonClient.sendRequest("get_frame", "{\"camera_id\":0,\"quality\":70,\"draw_skeleton\":true}");
+                    String response = pythonClient.sendRequest("get_frame", "{\"camera_id\":0,\"quality\":60,\"draw_skeleton\":true}");
                     JsonValue json = jsonReader.parse(response);
                     if (json != null && json.getBoolean("ok", false)) {
                         JsonValue data = json.get("data");
@@ -191,7 +192,7 @@ public class GameOneScreen implements Screen {
                             handleGestureFromFrame(data);
                         }
                     }
-                    Thread.sleep(33);
+                    Thread.sleep(16);
                 } catch (Exception ignored) {
                     try {
                         Thread.sleep(250);
@@ -329,18 +330,19 @@ public class GameOneScreen implements Screen {
     }
 
     private void updateCameraTexture() {
-        if (latestFrameBase64 == null || latestFrameBase64.isEmpty()) {
+        String currentBase64 = latestFrameBase64;
+        if (currentBase64 == null || currentBase64.isEmpty() || currentBase64.equals(processedFrameBase64)) {
             return;
         }
         try {
-            byte[] bytes = Base64.getDecoder().decode(latestFrameBase64);
+            byte[] bytes = Base64.getDecoder().decode(currentBase64);
             Pixmap pixmap = new Pixmap(bytes, 0, bytes.length);
-            if (cameraTexture == null) {
-                cameraTexture = new Texture(pixmap);
-            } else {
-                cameraTexture.draw(pixmap, 0, 0);
+            if (cameraTexture != null) {
+                cameraTexture.dispose();
             }
+            cameraTexture = new Texture(pixmap);
             pixmap.dispose();
+            processedFrameBase64 = currentBase64;
         } catch (Exception ignored) {
         }
     }

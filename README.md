@@ -1,8 +1,121 @@
-# Title
+# ZealGame - Hand Gesture Gaming
 
-A [libGDX](https://libgdx.com/) project generated with [gdx-liftoff](https://github.com/libgdx/gdx-liftoff).
+A [libGDX](https://libgdx.com/) project with MediaPipe hand gesture recognition for interactive gesture-based gameplay.
 
-This project was generated with a template including simple application launchers and a main class extending `Game` that sets the first screen.
+## Game Mechanics
+
+This game features two unique hand gesture-controlled games that utilize real-time camera tracking and MediaPipe gesture recognition.
+
+### Game One: Gesture Memory Challenge
+
+**Objective:** Memorize and repeat increasingly complex gesture sequences within a time limit.
+
+#### How to Play
+1. **Sequence Display:** At the start of each round, 4 random gestures are shown on screen
+2. **Memorize:** Study the sequence (e.g., "Peace, OK, HighFive, Fist")
+3. **Perform:** Use your hand to perform each gesture in the exact order
+4. **Time Limit:** You have 10 seconds to complete the sequence
+5. **Retry on Mistakes:** If you perform the wrong gesture, the sequence resets but the timer keeps running
+6. **Progress:** Successfully complete the sequence to advance to the next round with a new 4-gesture combination
+
+#### Game Rules
+- **Fixed Sequence Length:** Always 4 gestures per round
+- **All Gestures Used:** Any of the 7 gestures can appear (Peace, OK, HighFive, Fist, Point, Rock, ILoveYou)
+- **10-Second Timer:** Each round has exactly 10 seconds to complete
+- **Cooldown Period:** After each correct gesture, there's a 1.5-second cooldown to give you time to change hand positions
+- **Mistakes Reset Progress:** Wrong gesture resets your progress in that sequence, but you can keep trying until time runs out
+- **Auto-Advance:** When timer expires OR sequence is completed, a new round starts immediately with a fresh sequence
+
+#### Scoring System
+- **Base Points:** 100 points per correct gesture
+- **Combo Multiplier:**
+  - 3+ consecutive correct: 1.5x multiplier
+  - 5+ consecutive correct: 2.0x multiplier
+  - 10+ consecutive correct: 3.0x multiplier
+- **Speed Bonus:** +50 points if you respond within 2 seconds
+- **Penalty:** -50 points for wrong gestures
+- **Accuracy Tracking:** Stats show correct/total gestures attempted
+
+#### Visual Display
+- **Camera Feed:** Live video showing your hand with skeleton overlay
+- **Timer:** Large countdown timer (turns yellow at 6s, red at 3s)
+- **Expected Gesture:** Current gesture you need to perform shown in top-right corner
+- **Sequence:** Full 4-gesture sequence displayed at bottom
+- **Progress:** Shows how many gestures completed (e.g., "Progress: 2/4")
+- **Score & Combo:** Real-time score and combo multiplier display
+
+---
+
+### Game Two: Bug Ninja
+
+**Objective:** Slice flying bugs with your hand before they escape off screen, avoiding penalties.
+
+#### How to Play
+1. **Hand Tracking:** Your hand position is tracked in real-time with a sword following your movements
+2. **Bug Spawning:** Colorful bugs fly into the screen from various directions
+3. **Slice Bugs:** Move your hand over bugs to slice them
+4. **Avoid Misses:** Don't let bugs escape off the edges of the camera area
+5. **Build Combos:** Slice multiple bugs quickly to build combo multipliers
+
+#### Game Rules
+- **Hand Trail:** Your hand leaves a visual trail showing movement path
+- **Collision Detection:** Bugs are sliced when your hand trail intersects them
+- **Spawn Rate:** New bugs appear at regular intervals (every 2 seconds)
+- **Bug Movement:** Each bug has random velocity and curved trajectory
+- **Escape Penalty:** Bugs that leave the camera area without being sliced incur penalties
+- **Combo Window:** Slice bugs within 1 second of each other to maintain combo
+
+#### Bug Types & Points
+- **Purple Bugs:** 10 points (slowest)
+- **Green Bugs:** 20 points
+- **Blue Bugs:** 30 points
+- **Red Bugs:** 50 points (fastest, most valuable)
+
+#### Scoring System
+- **Bug Points:** Base points based on bug color/type
+- **Combo Multiplier:**
+  - 3+ bugs in combo: 2.0x multiplier
+  - 5+ bugs in combo: 3.0x multiplier
+- **Miss Penalty:** -10 points when a bug escapes
+- **Stats Tracking:** Displays bugs sliced vs. bugs missed
+
+#### Visual Display
+- **Camera Feed:** Semi-transparent live video (30% opacity) as background
+- **Hand Landmarks:** Optional debug display of 21 hand landmark points
+- **Hand Trail:** Smooth trail following hand movement
+- **Sword Graphic:** Animated sword aligned with hand movement direction
+- **Bugs:** Animated sprites with rotation and smooth movement
+- **Performance Optimized:** Runs at 60 FPS with consolidated rendering
+- **UI:** Score, combo multiplier, high score, and stats displayed
+
+#### Performance Features
+- **60 FPS Target:** Optimized rendering with minimal overhead
+- **Smart Rendering:** Consolidated ShapeRenderer passes (2 instead of 3)
+- **No Logging:** Performance-critical sections avoid console output
+- **Smooth Interpolation:** Hand position uses lerp for fluid movement
+- **Camera Buffer:** 100px border around camera feed for gameplay area
+
+---
+
+### Common Features (Both Games)
+
+#### Camera Loading Screen
+- Both games display "Initializing camera..." with animated dots
+- Game doesn't start until first camera frame is received
+- Prevents playing before camera is ready
+
+#### Gesture Recognition
+- **Real-time Detection:** Uses MediaPipe for accurate hand tracking
+- **7 Gestures Supported:** Peace, OK, HighFive, Fist, Point, Rock, ILoveYou
+- **Stability Filtering:** Requires consistent detection to prevent false positives
+- **Visual Feedback:** Expected gestures shown as images for easy identification
+
+#### Controls
+- **Back Button:** Top-left corner returns to main menu
+- **Camera Feed:** Live view with real-time hand skeleton overlay
+- **Responsive UI:** All elements scale properly with window size
+
+---
 
 ## Platforms
 

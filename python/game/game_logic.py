@@ -4,104 +4,134 @@ Handles sequence generation, validation, and difficulty progression.
 """
 from typing import List, Optional
 import random
+import time
 
 
 class GestureMemoryGame:
     """
     Gesture Memory Game logic.
     
-    Player must repeat a random gesture sequence.
-    Sequence grows longer each round.
+    Player must repeat a random gesture sequence of 4 gestures.
+    Each round has a 10-second timer. Player can retry until time runs out.
     """
     
-    # Difficulty levels: (initial_length, max_length)
-    DIFFICULTIES = {
-        "easy": (3, 6),
-        "medium": (4, 8),
-        "hard": (5, 12),
-    }
+    # Fixed sequence length
+    SEQUENCE_LENGTH = 4
+    
+    # Time limit per round (seconds)
+    TIME_LIMIT = 10.0
+    
+    # All available gestures
+    ALL_GESTURES = [1, 2, 4, 5, 6, 7, 10]  # Peace, OK, HighFive, Fist, Point, Rock, ILoveYou
     
     def __init__(self, difficulty: str = "medium"):
         """
         Initialize game.
         
         Args:
-            difficulty: One of "easy", "medium", "hard"
+            difficulty: Not used anymore, kept for compatibility
         """
-        if difficulty not in self.DIFFICULTIES:
-            difficulty = "medium"
-        
         self.difficulty = difficulty
-        self.initial_length, self.max_length = self.DIFFICULTIES[difficulty]
         
-        self.sequence: List[int] = []  # Target sequence
+        self.sequence: List[int] = []  # Target sequence (always 4 gestures)
         self.player_input: List[int] = []  # Player's input so far
         self.current_round = 0
         self.score = 0
         self.game_over = False
         self.won = False
+        self.round_start_time = 0.0  # When current round started
+        self.time_remaining = self.TIME_LIMIT
         
         # Start first round
         self._advance_round()
     
     def _advance_round(self):
-        """Start a new round by extending the sequence."""
+        """Start a new round with a new 4-gesture sequence."""
         self.current_round += 1
         
-        # Determine sequence length for this round
-        current_length = min(
-            self.initial_length + (self.current_round - 1),
-            self.max_length
-        )
-        
-        # Generate or extend sequence
-        if self.current_round == 1:
-            self.sequence = [random.randint(1, 4) for _ in range(current_length)]
-        else:
-            # Add one more gesture to existing sequence
-            self.sequence.append(random.randint(1, 4))
+        # Generate new random sequence of exactly 4 gestures
+        self.sequence = [random.choice(self.ALL_GESTURES) for _ in range(self.SEQUENCE_LENGTH)]
         
         self.player_input = []
-        self.score = len(self.sequence) - self.initial_length
+        self.round_start_time = time.time()
+        self.time_remaining = self.TIME_LIMIT
+    
+    def get_time_remaining(self) -> float:
+        """Get the time remaining in the current round."""
+        if self.game_over:
+            return 0.0
+        elapsed = time.time() - self.round_start_time
+        self.time_remaining = max(0.0, self.TIME_LIMIT - elapsed)
+        return self.time_remaining
+    
+    def is_time_expired(self) -> bool:
+        """Check if the current round's timer has expired."""
+        return self.get_time_remaining() <= 0.0
     
     def input_gesture(self, gesture_id: int) -> dict:
         """
         Process player gesture input.
         
         Args:
-            gesture_id: Gesture ID (1-4) or None for no gesture
+            gesture_id: Gesture ID from ALL_GESTURES or None for no gesture
         
         Returns:
             {
                 'valid': bool,  # Correct gesture
                 'complete': bool,  # Sequence complete
                 'correct_so_far': bool,  # Input matches sequence so far
-                'progress': (current, total),  # (3, 6) means 3 of 6
+                'progress': (current, total),  # (3, 4) means 3 of 4
                 'expected': int,  # Next expected gesture
                 'mistake': bool,  # Made a mistake
+                'time_expired': bool,  # Timer ran out
+                'time_remaining': float,  # Seconds remaining
             }
         """
-            if len(self.player_input) >= len(self.sequence):
-                return {
-                    'valid': False,
-                    'complete': True,
-                    'correct_so_far': True,
-                    'progress': (len(self.player_input), len(self.sequence)),
-                    'expected': None,
-                    'mistake': False,
-                }
+        # Update time remaining
+        time_remaining = self.get_time_remaining()
+        
+        # Check if timer expired - if so, auto-advance to next round
+        if self.is_time_expired():
+            self._advance_round()
+            return {
+                'valid': False,
+                'complete': False,
+                'correct_so_far': False,
+                'progress': (0, len(self.sequence)),
+                'expected': self.sequence[0],
+                'mistake': False,
+                'time_expired': True,
+                'time_remaining': self.TIME_LIMIT,
+                'new_sequence': self.sequence.copy(),
+            }
+        
+        # Already completed this round
+        if len(self.player_input) >= len(self.sequence):
+            return {
+                'valid': False,
+                'complete': True,
+                'correct_so_far': True,
+                'progress': (len(self.player_input), len(self.sequence)),
+                'expected': None,
+                'mistake': False,
+                'time_expired': False,
+                'time_remaining': time_remaining,
+            }
 
-        if gesture_id is None or not (1 <= gesture_id <= 4):
-                expected = None
-                if len(self.player_input) < len(self.sequence):
-                    expected = self.sequence[len(self.player_input)]
+        # Invalid gesture
+        if gesture_id is None or gesture_id not in self.ALL_GESTURES:
+            expected = None
+            if len(self.player_input) < len(self.sequence):
+                expected = self.sequence[len(self.player_input)]
             return {
                 'valid': False,
                 'complete': False,
                 'correct_so_far': True,
                 'progress': (len(self.player_input), len(self.sequence)),
-                    'expected': expected,
+                'expected': expected,
                 'mistake': False,
+                'time_expired': False,
+                'time_remaining': time_remaining,
             }
         
         # Check if it matches the expected gesture
@@ -110,44 +140,49 @@ class GestureMemoryGame:
         
         if is_correct:
             self.player_input.append(gesture_id)
+            self.score += 1
             
             # Check if sequence is complete
             if len(self.player_input) == len(self.sequence):
-                # Check if we've reached max length
-                if len(self.sequence) == self.max_length:
-                    self.game_over = True
-                    self.won = True
-                else:
-                    # Advance to next round
-                    self._advance_round()
+                # Sequence completed successfully - advance to next round
+                self._advance_round()
                 
                 return {
                     'valid': True,
                     'complete': True,
                     'correct_so_far': True,
-                    'progress': (len(self.player_input), len(self.sequence)),
+                    'progress': (self.SEQUENCE_LENGTH, self.SEQUENCE_LENGTH),
                     'expected': None,
                     'mistake': False,
+                    'time_expired': False,
+                    'time_remaining': self.TIME_LIMIT,
+                    'new_sequence': self.sequence.copy(),
+                }
+            else:
+                # Correct but not complete yet
+                return {
+                    'valid': True,
+                    'complete': False,
+                    'correct_so_far': True,
+                    'progress': (len(self.player_input), len(self.sequence)),
+                    'expected': self.sequence[len(self.player_input)] if len(self.player_input) < len(self.sequence) else None,
+                    'mistake': False,
+                    'time_expired': False,
+                    'time_remaining': time_remaining,
                 }
         else:
-            # Mistake - do NOT end game, just report mistake
+            # Mistake - reset player input, let them try again until timer expires
+            self.player_input = []
             return {
                 'valid': False,
                 'complete': False,
                 'correct_so_far': False,
-                'progress': (len(self.player_input), len(self.sequence)),
-                'expected': expected,
+                'progress': (0, len(self.sequence)),
+                'expected': self.sequence[0],  # Start from beginning
                 'mistake': True,
+                'time_expired': False,
+                'time_remaining': time_remaining,
             }
-        
-        return {
-            'valid': True,
-            'complete': False,
-            'correct_so_far': True,
-            'progress': (len(self.player_input), len(self.sequence)),
-            'expected': self.sequence[len(self.player_input)] if len(self.player_input) < len(self.sequence) else None,
-            'mistake': False,
-        }
     
     def get_sequence_display(self) -> List[int]:
         """Get the full sequence to display at round start."""
@@ -172,4 +207,5 @@ class GestureMemoryGame:
             'difficulty': self.difficulty,
             'game_over': self.game_over,
             'won': self.won,
+            'time_remaining': self.get_time_remaining(),
         }

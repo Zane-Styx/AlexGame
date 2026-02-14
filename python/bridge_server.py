@@ -220,13 +220,15 @@ class JsonLineHandler(socketserver.StreamRequestHandler):
         with _game_lock:
             global _game
             _game = GestureMemoryGame(str(difficulty))
+            stats = _game.get_stats()
             return {
                 "ok": True,
                 "data": {
-                    "stats": _game.get_stats(),
+                    "stats": stats,
                     "sequence": _game.get_sequence_display(),
                     "expected": _game.get_next_expected(),
                     "progress": _game.get_progress(),
+                    "time_remaining": stats.get('time_remaining', 10.0),
                 },
             }
 
@@ -240,14 +242,23 @@ class JsonLineHandler(socketserver.StreamRequestHandler):
 
             gesture_id = payload.get("gesture_id")
             result = _game.input_gesture(gesture_id)
+            stats = _game.get_stats()
+            
+            response_data = {
+                "result": result,
+                "stats": stats,
+                "expected": _game.get_next_expected(),
+                "progress": _game.get_progress(),
+                "time_remaining": stats.get('time_remaining', 10.0),
+            }
+            
+            # If a new sequence started, include it
+            if result.get('new_sequence'):
+                response_data['sequence'] = result['new_sequence']
+            
             return {
                 "ok": True,
-                "data": {
-                    "result": result,
-                    "stats": _game.get_stats(),
-                    "expected": _game.get_next_expected(),
-                    "progress": _game.get_progress(),
-                },
+                "data": response_data,
             }
 
     def _game_state(self) -> Dict[str, Any]:
@@ -258,13 +269,21 @@ class JsonLineHandler(socketserver.StreamRequestHandler):
             if _game is None:
                 return {"ok": False, "error": "game_not_started"}
 
+            stats = _game.get_stats()
+            
+            # Check if timer expired and advance round if needed
+            if _game.is_time_expired() and not _game.game_over:
+                _game._advance_round()
+                stats = _game.get_stats()
+            
             return {
                 "ok": True,
                 "data": {
-                    "stats": _game.get_stats(),
+                    "stats": stats,
                     "sequence": _game.get_sequence_display(),
                     "expected": _game.get_next_expected(),
                     "progress": _game.get_progress(),
+                    "time_remaining": stats.get('time_remaining', 10.0),
                 },
             }
 
@@ -281,7 +300,15 @@ def _get_frame_from_hand_tracker(camera_id: int):
                     _hand_tracker.release()
             except Exception:
                 pass
-            _hand_tracker = HandTracker(camera_id=camera_id)
+            _hand_tracker = HandTracker(
+                camera_id=camera_id,
+                flip_horizontal=True,
+                use_gpu=True,
+                adaptive_performance=True,
+                enable_roi_tracking=False,      # ← Modify these
+                enable_kalman_filter=False,     # ← for your needs
+                motion_detection=False
+            )
             _hand_tracker_camera_id = camera_id
 
         frame, hand_data = _hand_tracker.get_frame_and_landmarks()

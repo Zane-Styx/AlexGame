@@ -1,0 +1,15 @@
+# Enhanced MediaPipe Hand Tracking Dependencies
+
+# Core dependencies
+opencv-python>=4.8.0
+numpy>=1.24.0
+mediapipe>=0.10.0
+
+# Optional: Kalman filtering for smooth tracking (recommended)
+filterpy>=1.4.5
+
+# Optional: SciPy for advanced filters
+scipy>=1.10.0
+
+# Development/Testing
+pytest>=7.4.0

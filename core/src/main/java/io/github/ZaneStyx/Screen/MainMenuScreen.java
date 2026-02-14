@@ -53,7 +53,7 @@ public class MainMenuScreen implements Screen {
         com.badlogic.gdx.scenes.scene2d.Actor titleLabel = UIHelper.createSpriteLabel("TITLE", UIHelper.DEFAULT_SPRITE_FONT, 4.0f);
         rootTable.add(titleLabel).center().padBottom(30f).row();
         
-        // Game buttons (2x2)
+        // Game buttons (1x2)
         Table gameGrid = new Table();
 
         com.badlogic.gdx.scenes.scene2d.Actor game1 = UIHelper.createButton("Game One", skin, new ClickListener() {
@@ -74,28 +74,8 @@ public class MainMenuScreen implements Screen {
             }
         });
 
-        com.badlogic.gdx.scenes.scene2d.Actor game3 = UIHelper.createButton("Game Three", skin, new ClickListener() {
-            @Override
-            public void clicked(com.badlogic.gdx.scenes.scene2d.InputEvent event, float x, float y) {
-                if (game != null) {
-                    game.setScreen(new GameThreeScreen());
-                }
-            }
-        });
-
-        com.badlogic.gdx.scenes.scene2d.Actor game4 = UIHelper.createButton("Game Four", skin, new ClickListener() {
-            @Override
-            public void clicked(com.badlogic.gdx.scenes.scene2d.InputEvent event, float x, float y) {
-                if (game != null) {
-                    game.setScreen(new GameFourScreen());
-                }
-            }
-        });
-
         gameGrid.add(game1).width(180f).height(70f).pad(10f);
-        gameGrid.add(game2).width(180f).height(70f).pad(10f).row();
-        gameGrid.add(game3).width(180f).height(70f).pad(10f);
-        gameGrid.add(game4).width(180f).height(70f).pad(10f);
+        gameGrid.add(game2).width(180f).height(70f).pad(10f);
 
         rootTable.add(gameGrid).center().padBottom(30f).row();
 

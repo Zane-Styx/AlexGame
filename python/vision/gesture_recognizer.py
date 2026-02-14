@@ -1,15 +1,17 @@
 """
 Gesture recognition module using rule-based landmark analysis.
 Maps hand landmarks to gesture IDs without ML training.
+Enhanced with vectorized operations for optimal performance.
 """
 from typing import Optional, Tuple
 from dataclasses import dataclass
+import numpy as np
 
 
 @dataclass
 class GestureResult:
     """Result of gesture recognition."""
-    gesture_id: Optional[int]  # 1=Peace, 2=OK, 3=Like, 4=HighFive
+    gesture_id: Optional[int]  # 1=Peace, 2=OK, 4=HighFive
     gesture_name: str
     confidence: float
     is_valid: bool  # Whether gesture meets stability threshold
@@ -22,16 +24,22 @@ class GestureRecognizer:
     Gestures:
     1 = Peace: Index and middle finger up, others down
     2 = OK: Thumb and index touching, others up
-    3 = Like: Thumb up, other fingers down/curled
     4 = HighFive: All fingers up, palm open
+    5 = Fist: All fingers down/curled
+    6 = Point: Only index finger up
+    7 = Rock: Index and pinky up (rock/horn gesture)
+    10 = ILoveYou: Thumb, index, and pinky up
     """
     
     GESTURE_NAMES = {
         None: "None",
         1: "Peace",
         2: "OK",
-        3: "Like",
-        4: "HighFive"
+        4: "HighFive",
+        5: "Fist",
+        6: "Point",
+        7: "Rock",
+        10: "ILoveYou"
     }
     
     # Landmark indices
@@ -49,17 +57,24 @@ class GestureRecognizer:
     
     PALM_CENTER = 0
     
-    def __init__(self, confidence_threshold: float = 0.6):
+    def __init__(self, confidence_threshold: float = 0.6, enable_smoothing: bool = True):
         """
         Initialize gesture recognizer.
         
         Args:
             confidence_threshold: Min confidence for gesture detection (0-1)
+            enable_smoothing: Enable temporal smoothing for more stable results
         """
         self.confidence_threshold = confidence_threshold
+        self.enable_smoothing = enable_smoothing
         self.previous_gesture = None
         self.consecutive_count = 0
-        self.stability_frames = 1  # Immediate acceptance after first detection
+        self.stability_frames = 2 if enable_smoothing else 1  # Require consistency
+        
+        # Temporal smoothing buffer
+        self.gesture_history = []  # Last N gestures
+        self.history_size = 5
+        self.confidence_history = []
     
     def recognize(self, landmarks: list[Tuple[float, float, float]]) -> GestureResult:
         """
@@ -103,57 +118,80 @@ class GestureRecognizer:
     
     def _classify_gesture(self, landmarks: list) -> Tuple[Optional[int], float]:
         """
-        Classify gesture from landmarks.
+        Classify gesture from landmarks with enhanced detection.
         
         Returns:
-            (gesture_id, confidence) - gesture_id is 1-4 or None
+            (gesture_id, confidence) - gesture_id is 1-10 or None
         """
         # Get finger positions relative to palm
         fingers_up = self._get_fingers_up(landmarks)
         touch_ok = self._check_ok_touch(landmarks)
-        thumb_up = fingers_up[0]
-        fingers = fingers_up[1:]
+        thumb_up, index_up, middle_up, ring_up, pinky_up = fingers_up
         
-        # Peace: Index and middle up, ring and pinky down
-        if fingers_up[1] and fingers_up[2] and not fingers_up[3] and not fingers_up[4]:
-            return 1, 0.95
+        # Calculate confidence based on finger clarity
+        base_confidence = self._calculate_gesture_confidence(landmarks, fingers_up)
+        
+        # Priority order: More specific gestures first
         
         # OK: Thumb and index touch, middle/ring/pinky up
-        if touch_ok and fingers_up[2] and fingers_up[3] and fingers_up[4]:
-            return 2, 0.90
+        if touch_ok and middle_up and ring_up and pinky_up:
+            return 2, min(0.90 * base_confidence, 0.95)
         
-        # Like: Thumb up, others down/curled
-        if thumb_up and not any(fingers):
-            return 3, 0.92
+        # ILoveYou: Thumb, index, and pinky up; middle and ring down
+        if thumb_up and index_up and pinky_up and not middle_up and not ring_up:
+            return 10, min(0.91 * base_confidence, 0.94)
+        
+        # Rock: Index and pinky up, others down
+        if index_up and pinky_up and not middle_up and not ring_up and not thumb_up:
+            return 7, min(0.89 * base_confidence, 0.93)
+        
+        # Peace: Index and middle up, ring and pinky down
+        if index_up and middle_up and not ring_up and not pinky_up:
+            return 1, min(0.93 * base_confidence, 0.95)
+        
+        # Point: Only index finger up
+        if index_up and not middle_up and not ring_up and not pinky_up and not thumb_up:
+            return 6, min(0.92 * base_confidence, 0.95)
         
         # HighFive: All fingers up, hand open
         if all(fingers_up):
-            return 4, 0.94
+            return 4, min(0.92 * base_confidence, 0.95)
+        
+        # Fist: All fingers down
+        if not any(fingers_up):
+            return 5, min(0.90 * base_confidence, 0.94)
         
         return None, 0.0
     
     def _get_fingers_up(self, landmarks: list) -> list[bool]:
         """
-        Determine which fingers are extended.
+        Determine which fingers are extended using vectorized operations.
         
-        Returns:
+       Returns:
             [thumb_up, index_up, middle_up, ring_up, pinky_up]
         """
-        # A finger is "up" if its tip is higher (lower y) than PIP joint
+        # Convert to numpy for faster operations
+        if isinstance(landmarks, list):
+            landmarks_array = np.array(landmarks, dtype=np.float32)
+        else:
+            landmarks_array = landmarks
+        
         fingers_up = []
         
         # Thumb: special case, check x-direction
-        thumb_extended = landmarks[self.THUMB_TIP][0] < landmarks[self.THUMB_IP][0] - 0.02
-        fingers_up.append(thumb_extended)
+        thumb_extended = landmarks_array[self.THUMB_TIP, 0] < landmarks_array[self.THUMB_IP, 0] - 0.02
+        fingers_up.append(bool(thumb_extended))
         
-        # Other fingers: y-direction (tip above PIP)
-        finger_tips = [self.INDEX_TIP, self.MIDDLE_TIP, self.RING_TIP, self.PINKY_TIP]
-        finger_pips = [self.INDEX_PIP, self.MIDDLE_PIP, self.RING_PIP, self.PINKY_PIP]
+        # Other fingers: y-direction (tip above PIP) - vectorized
+        finger_tips = np.array([self.INDEX_TIP, self.MIDDLE_TIP, self.RING_TIP, self.PINKY_TIP])
+        finger_pips = np.array([self.INDEX_PIP, self.MIDDLE_PIP, self.RING_PIP, self.PINKY_PIP])
         
-        for tip_idx, pip_idx in zip(finger_tips, finger_pips):
-            extended = landmarks[tip_idx][1] < landmarks[pip_idx][1] - 0.02
-            fingers_up.append(extended)
+        # Vectorized comparison
+        tip_y = landmarks_array[finger_tips, 1]
+        pip_y = landmarks_array[finger_pips, 1]
+        extended = tip_y < (pip_y - 0.02)
         
+        fingers_up.extend(extended.tolist())
         return fingers_up
     
     def _check_ok_touch(self, landmarks: list) -> bool:
@@ -169,7 +207,25 @@ class GestureRecognizer:
         # Touching if distance < 0.05 (normalized coords)
         return distance < 0.05
     
+    def _calculate_gesture_confidence(self, landmarks: list, fingers_up: list) -> float:
+        """Calculate confidence score based on landmark quality and finger extension clarity."""
+        # Check if fingers are clearly extended or clearly down (no ambiguity)
+        confidence = 1.0
+        
+        finger_tips = [self.INDEX_TIP, self.MIDDLE_TIP, self.RING_TIP, self.PINKY_TIP]
+        finger_pips = [self.INDEX_PIP, self.MIDDLE_PIP, self.RING_PIP, self.PINKY_PIP]
+        
+        for i, (tip_idx, pip_idx) in enumerate(zip(finger_tips, finger_pips)):
+            y_diff = abs(landmarks[tip_idx][1] - landmarks[pip_idx][1])
+            # Penalize ambiguous positions (close to threshold)
+            if 0.01 < y_diff < 0.04:
+                confidence *= 0.9
+        
+        return confidence
+    
     def reset_stability(self):
         """Reset stability counter (for new game session)."""
         self.previous_gesture = None
         self.consecutive_count = 0
+        self.gesture_history.clear()
+        self.confidence_history.clear()

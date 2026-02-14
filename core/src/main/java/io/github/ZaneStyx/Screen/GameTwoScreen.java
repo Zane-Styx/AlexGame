@@ -44,6 +44,10 @@ public class GameTwoScreen implements Screen {
     private static final float EXIT_BUTTON_WIDTH = 186f;
     private static final float EXIT_BUTTON_HEIGHT = 56f;
     
+    // Video display constants
+    private static final float VIDEO_BORDER = 50f;
+    private float videoX, videoY, videoWidth, videoHeight;
+    
     // Bug Ninja game variables
     private Array<Bug> bugs;
     private SpriteAnimator bugAnimator;
@@ -51,6 +55,13 @@ public class GameTwoScreen implements Screen {
     private static final float SPAWN_INTERVAL = 1.5f;
     private static final float BUG_SIZE = 100f;
     private int score;
+    private int highScore;
+    private int bugsSliced;
+    private int bugsMissed;
+    private long lastSliceTime;
+    private int comboCount;
+    private float comboMultiplier;
+    private static final long COMBO_WINDOW_MS = 2000;
     
     // Hand tracking and sword
     private Texture swordTexture;
@@ -67,6 +78,11 @@ public class GameTwoScreen implements Screen {
     private static final float HAND_SMOOTH_MAX = 0.45f;
     private Array<HandTrailPoint> handTrail;
     private static final int MAX_TRAIL_POINTS = 50;
+    private static final boolean DRAW_DEBUG_LANDMARKS = false; // Disabled for performance
+    
+    // Loading state
+    private volatile boolean cameraReady = false;
+    private volatile String loadingMessage = "Initializing camera...";
     
     // Hand trail point class
     private static class HandTrailPoint {
@@ -112,6 +128,16 @@ public class GameTwoScreen implements Screen {
             
             bounds.set(x, y, BUG_SIZE, BUG_SIZE);
         }
+        
+        int getPointValue() {
+            switch (animName) {
+                case "red": return 50;
+                case "blue": return 30;
+                case "green": return 20;
+                case "purple": return 10;
+                default: return 10;
+            }
+        }
     }
 
     @Override
@@ -149,6 +175,12 @@ public class GameTwoScreen implements Screen {
         
         spawnTimer = 0f;
         score = 0;
+        highScore = 0;
+        bugsSliced = 0;
+        bugsMissed = 0;
+        lastSliceTime = 0;
+        comboCount = 0;
+        comboMultiplier = 1.0f;
 
         // Create back button in top-left corner
         Table buttonTable = new Table();
@@ -170,16 +202,45 @@ public class GameTwoScreen implements Screen {
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
         updateCameraTexture();
+        
+        // Show loading screen while camera initializes
+        if (!cameraReady) {
+            batch.begin();
+            font.getData().setScale(2.0f);
+            float textX = Gdx.graphics.getWidth() / 2f - 150f;
+            float textY = Gdx.graphics.getHeight() / 2f;
+            font.draw(batch, loadingMessage, textX, textY);
+            
+            // Show animated dots
+            int dots = (int)((System.currentTimeMillis() / 500) % 4);
+            String dotString = "";
+            for (int i = 0; i < dots; i++) {
+                dotString += ".";
+            }
+            font.draw(batch, dotString, textX + 300f, textY);
+            
+            font.getData().setScale(1.0f);
+            font.draw(batch, "Please wait...", textX + 20f, textY - 50f);
+            batch.end();
+            
+            stage.act(delta);
+            stage.draw();
+            return;
+        }
+        
+        // Calculate video display area with 100px border
+        float screenWidth = Gdx.graphics.getWidth();
+        float screenHeight = Gdx.graphics.getHeight();
+        calculateVideoArea(screenWidth, screenHeight);
+        
         updateGame(delta);
 
         batch.begin();
-        float screenWidth = Gdx.graphics.getWidth();
-        float screenHeight = Gdx.graphics.getHeight();
         
-        // Draw camera feed as background (smaller, semi-transparent)
+        // Draw camera feed scaled with 100px border, maintaining aspect ratio
         if (cameraTexture != null) {
             batch.setColor(1f, 1f, 1f, 0.3f);
-            batch.draw(cameraTexture, 0, 0, screenWidth, screenHeight);
+            batch.draw(cameraTexture, videoX, videoY, videoWidth, videoHeight);
             batch.setColor(1f, 1f, 1f, 1f);
         }
         
@@ -196,11 +257,13 @@ public class GameTwoScreen implements Screen {
         }
         batch.end();
 
-        // Draw dagger trail
+        // Draw hand trail and sword with single ShapeRenderer pass
+        Gdx.gl.glEnable(GL20.GL_BLEND);
+        shapeRenderer.setProjectionMatrix(batch.getProjectionMatrix());
+        shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
+        
+        // Draw hand trail
         if (handTrail.size > 1) {
-            Gdx.gl.glEnable(GL20.GL_BLEND);
-            shapeRenderer.setProjectionMatrix(batch.getProjectionMatrix());
-            shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
             for (int i = 1; i < handTrail.size; i++) {
                 HandTrailPoint prev = handTrail.get(i - 1);
                 HandTrailPoint curr = handTrail.get(i);
@@ -209,26 +272,28 @@ public class GameTwoScreen implements Screen {
                 shapeRenderer.setColor(1f, 1f, 1f, alpha);
                 shapeRenderer.rectLine(prev.x, prev.y, curr.x, curr.y, 6f);
             }
-            shapeRenderer.end();
-            Gdx.gl.glDisable(GL20.GL_BLEND);
         }
         
-        // Draw hand landmarks (temporary debug)
-        if (currentLandmarks.size > 0) {
-            screenWidth = Gdx.graphics.getWidth();
-            screenHeight = Gdx.graphics.getHeight();
-            Gdx.gl.glEnable(GL20.GL_BLEND);
-            shapeRenderer.setProjectionMatrix(batch.getProjectionMatrix());
-            shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
+        // Draw hand landmarks only if debug enabled
+        if (DRAW_DEBUG_LANDMARKS && currentLandmarks.size > 0) {
             shapeRenderer.setColor(0f, 1f, 0f, 0.8f);
             for (float[] lm : currentLandmarks) {
-                float x = lm[0] * screenWidth;
-                float y = (1f - lm[1]) * screenHeight;
+                float x = videoX + (lm[0] * videoWidth);
+                float y = videoY + ((1f - lm[1]) * videoHeight);
                 shapeRenderer.circle(x, y, 5f);
             }
-            shapeRenderer.end();
-            Gdx.gl.glDisable(GL20.GL_BLEND);
         }
+        
+        shapeRenderer.end();
+        
+        // Draw border with line mode
+        shapeRenderer.begin(ShapeRenderer.ShapeType.Line);
+        shapeRenderer.setColor(0.3f, 0.3f, 0.3f, 1f);
+        Gdx.gl.glLineWidth(3f);
+        shapeRenderer.rect(videoX, videoY, videoWidth, videoHeight);
+        shapeRenderer.end();
+        
+        Gdx.gl.glDisable(GL20.GL_BLEND);
         
         // Draw sword following hand
         if (swordRegion != null) {
@@ -240,7 +305,18 @@ public class GameTwoScreen implements Screen {
         
         batch.begin();
         // Draw UI
+        font.getData().setScale(2.0f);
         font.draw(batch, "Score: " + score, 20, screenHeight - 80);
+        font.getData().setScale(1.5f);
+        if (highScore > 0) {
+            font.draw(batch, "High: " + highScore, 20, screenHeight - 120);
+        }
+        if (comboCount > 1) {
+            font.draw(batch, "Combo: x" + comboCount + " (" + String.format("%.1f", comboMultiplier) + "x)", 20, screenHeight - 160);
+        }
+        font.getData().setScale(1.2f);
+        font.draw(batch, "Sliced: " + bugsSliced + " | Missed: " + bugsMissed, 20, screenHeight - 200);
+        font.getData().setScale(1.0f);
         batch.end();
 
         stage.act(delta);
@@ -302,15 +378,21 @@ public class GameTwoScreen implements Screen {
         }
         
         // Update bugs
-        float screenHeight = Gdx.graphics.getHeight();
-        float screenWidth = Gdx.graphics.getWidth();
-        
         for (int i = bugs.size - 1; i >= 0; i--) {
             Bug bug = bugs.get(i);
             bug.update(delta);
             
-            // Remove bugs that went off-screen (fell below or went to sides)
-            if (bug.y < -BUG_SIZE || bug.x < -BUG_SIZE || bug.x > screenWidth + BUG_SIZE) {
+            // Remove bugs that went off video area (fell below or went to sides)
+            if (bug.y < videoY - BUG_SIZE || 
+                bug.x < videoX - BUG_SIZE || 
+                bug.x > videoX + videoWidth + BUG_SIZE) {
+                if (bug.alive) {
+                    // Bug escaped - penalty
+                    bugsMissed++;
+                    score = Math.max(0, score - 10);
+                    comboCount = 0;
+                    comboMultiplier = 1.0f;
+                }
                 bugs.removeIndex(i);
             }
         }
@@ -354,6 +436,9 @@ public class GameTwoScreen implements Screen {
         float handY = lastHandPos[1];
         float handRadius = 30f;
         
+        long currentTime = System.currentTimeMillis();
+        boolean slicedAnyBug = false;
+        
         for (int i = bugs.size - 1; i >= 0; i--) {
             Bug bug = bugs.get(i);
             if (!bug.alive) continue;
@@ -361,38 +446,70 @@ public class GameTwoScreen implements Screen {
             // Check if hand is within bug bounds
             if (bug.bounds.contains(handX, handY) || bug.bounds.contains(handX + handRadius, handY)) {
                 bug.alive = false;
-                score += 10;
+                slicedAnyBug = true;
+                bugsSliced++;
+                
+                // Check for combo
+                if (lastSliceTime > 0 && (currentTime - lastSliceTime) < COMBO_WINDOW_MS) {
+                    comboCount++;
+                } else {
+                    comboCount = 1;
+                }
+                
+                // Calculate combo multiplier
+                if (comboCount >= 5) {
+                    comboMultiplier = 3.0f;
+                } else if (comboCount >= 3) {
+                    comboMultiplier = 2.0f;
+                } else {
+                    comboMultiplier = 1.0f;
+                }
+                
+                lastSliceTime = currentTime;
+                
+                // Award points based on bug type and combo
+                int points = (int)(bug.getPointValue() * comboMultiplier);
+                score += points;
+                
+                // Update high score
+                if (score > highScore) {
+                    highScore = score;
+                }
+                
                 // Remove the sliced bug
                 bugs.removeIndex(i);
             }
         }
+        
+        // Reset combo if no bugs sliced
+        if (!slicedAnyBug && lastSliceTime > 0 && (currentTime - lastSliceTime) > COMBO_WINDOW_MS) {
+            comboCount = 0;
+            comboMultiplier = 1.0f;
+        }
     }
     
     private void spawnBug() {
-        float screenWidth = Gdx.graphics.getWidth();
-        float screenHeight = Gdx.graphics.getHeight();
-        
-        // Spawn from bottom or sides
+        // Spawn at edges of the video area (bugs fly INTO the video area)
         float x, y, velocityX, velocityY;
         
         if (MathUtils.randomBoolean()) {
-            // Spawn from bottom
-            x = MathUtils.random(0f, screenWidth);
-            y = -BUG_SIZE;
+            // Spawn from bottom edge of video area
+            x = MathUtils.random(videoX, videoX + videoWidth - BUG_SIZE);
+            y = videoY;
             velocityX = MathUtils.random(-200f, 200f);
             velocityY = MathUtils.random(600f, 900f);
         } else {
-            // Spawn from sides
+            // Spawn from sides of video area
             if (MathUtils.randomBoolean()) {
-                // Left side
-                x = -BUG_SIZE;
+                // Left edge of video
+                x = videoX;
                 velocityX = MathUtils.random(200f, 400f);
             } else {
-                // Right side
-                x = screenWidth + BUG_SIZE;
+                // Right edge of video
+                x = videoX + videoWidth - BUG_SIZE;
                 velocityX = MathUtils.random(-400f, -200f);
             }
-            y = MathUtils.random(0f, screenHeight * 0.5f);
+            y = MathUtils.random(videoY, videoY + videoHeight * 0.5f);
             velocityY = MathUtils.random(500f, 800f);
         }
         
@@ -402,6 +519,35 @@ public class GameTwoScreen implements Screen {
         bugs.add(new Bug(x, y, velocityX, velocityY, animName));
     }
 
+    private void calculateVideoArea(float screenWidth, float screenHeight) {
+        // Calculate available area with border
+        float availableWidth = screenWidth - (VIDEO_BORDER * 2);
+        float availableHeight = screenHeight - (VIDEO_BORDER * 2);
+        
+        // Assume camera aspect ratio is 4:3 or 16:9, use texture if available
+        float videoAspect = 4f / 3f; // Default aspect ratio
+        if (cameraTexture != null) {
+            videoAspect = (float) cameraTexture.getWidth() / (float) cameraTexture.getHeight();
+        }
+        
+        // Calculate video dimensions maintaining aspect ratio
+        float availableAspect = availableWidth / availableHeight;
+        
+        if (availableAspect > videoAspect) {
+            // Available area is wider, fit to height
+            videoHeight = availableHeight;
+            videoWidth = videoHeight * videoAspect;
+        } else {
+            // Available area is taller, fit to width
+            videoWidth = availableWidth;
+            videoHeight = videoWidth / videoAspect;
+        }
+        
+        // Center the video in the screen
+        videoX = (screenWidth - videoWidth) / 2f;
+        videoY = (screenHeight - videoHeight) / 2f;
+    }
+    
     private ImageButton createBackButton() {
         return UIHelper.createImageButton(
             "ui/backBtn/BackBtn_0.png",
@@ -441,7 +587,7 @@ public class GameTwoScreen implements Screen {
                     }
 
                     try {
-                        String payload = "{\"camera_id\":0,\"quality\":35,\"max_width\":320,\"max_height\":240}";  // Smaller frames for smoother performance
+                        String payload = "{\"camera_id\":0,\"quality\":50,\"max_width\":480,\"max_height\":360}";  // Balanced quality
                         String response = pythonClient.sendRequest("get_frame", payload);
                         if (response != null) {
                             JsonValue root = jsonReader.parse(response);
@@ -456,28 +602,27 @@ public class GameTwoScreen implements Screen {
                                     // Extract hand landmarks
                                     JsonValue landmarks = data.get("hand_landmarks");
                                     if (landmarks != null && landmarks.isArray() && landmarks.size > 0) {
-                                        // Store landmarks for visualization
-                                        currentLandmarks.clear();
-                                        for (int i = 0; i < landmarks.size; i++) {
-                                            JsonValue lm = landmarks.get(i);
-                                            if (lm != null && lm.isArray() && lm.size >= 2) {
-                                                currentLandmarks.add(new float[]{lm.getFloat(0), lm.getFloat(1)});
+                                        // Store landmarks for visualization (only if debug enabled)
+                                        if (DRAW_DEBUG_LANDMARKS) {
+                                            currentLandmarks.clear();
+                                            for (int i = 0; i < landmarks.size; i++) {
+                                                JsonValue lm = landmarks.get(i);
+                                                if (lm != null && lm.isArray() && lm.size >= 2) {
+                                                    currentLandmarks.add(new float[]{lm.getFloat(0), lm.getFloat(1)});
+                                                }
                                             }
                                         }
                                         // Use middle finger tip (landmark 9) as hand position
                                         if (landmarks.size > 9) {
                                             JsonValue midFingerTip = landmarks.get(9);
                                             if (midFingerTip != null && midFingerTip.isArray() && midFingerTip.size >= 2) {
-                                                int frameWidth = data.getInt("width", 640);
-                                                int frameHeight = data.getInt("height", 480);
-                                                float screenWidth = Gdx.graphics.getWidth();
-                                                float screenHeight = Gdx.graphics.getHeight();
-                                                
-                                                // Convert normalized coordinates to screen coordinates
+                                                // Convert normalized coordinates (0-1) to video area coordinates
                                                 float normalizedX = midFingerTip.getFloat(0);
                                                 float normalizedY = midFingerTip.getFloat(1);
-                                                float screenX = normalizedX * screenWidth;
-                                                float screenY = (1f - normalizedY) * screenHeight;
+                                                
+                                                // Map to video display area (within 100px border)
+                                                float screenX = videoX + (normalizedX * videoWidth);
+                                                float screenY = videoY + ((1f - normalizedY) * videoHeight);
                                                 
                                                 if (smoothedHandPos == null) {
                                                     smoothedHandPos = new float[]{screenX, screenY};
@@ -507,7 +652,7 @@ public class GameTwoScreen implements Screen {
                                 }
                             }
                         }
-                        Thread.sleep(33); // ~30 FPS
+                        Thread.sleep(16); // ~60 FPS to match game one
                     } catch (Exception e) {
                         pythonConnected = false;
                         try {
@@ -543,6 +688,12 @@ public class GameTwoScreen implements Screen {
             }
             pixmap.dispose();
             processedFrameBase64 = currentBase64;
+            
+            // Mark camera as ready once first frame is received
+            if (!cameraReady) {
+                cameraReady = true;
+                loadingMessage = "Camera ready!";
+            }
         } catch (Exception e) {
             Gdx.app.error("GameTwoScreen", "Failed to decode camera frame", e);
         }

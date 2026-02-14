@@ -9,7 +9,6 @@ import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.scenes.scene2d.Stage;
-import com.badlogic.gdx.scenes.scene2d.ui.Image;
 import com.badlogic.gdx.scenes.scene2d.ui.ImageButton;
 import com.badlogic.gdx.scenes.scene2d.ui.Skin;
 import com.badlogic.gdx.scenes.scene2d.ui.Table;
@@ -35,13 +34,10 @@ public class GameOneScreen implements Screen {
     private volatile String latestFrameBase64;
     private String processedFrameBase64;
     private Texture cameraTexture;
-    private Texture gameUiTexture;
-    private Image gameUiImage;
     private Table uiPanel;
+    private java.util.HashMap<String, Texture> gestureTextures;
+    private volatile String expectedGestureName = null;
     private final JsonReader jsonReader = new JsonReader();
-    private static final float UI_PANEL_WIDTH = 512f;
-    private static final float UI_PANEL_HEIGHT = 768f;
-    private static final float UI_PANEL_LEFT_PADDING = 768f;
     private static final float EXIT_BUTTON_WIDTH = 186f;
     private static final float EXIT_BUTTON_HEIGHT = 56f;
     private volatile boolean gameLogicReady;
@@ -51,6 +47,46 @@ public class GameOneScreen implements Screen {
     private volatile String gameProgressText = "";
     private volatile int lastGestureId = -1;
     private volatile long lastGestureTimeMs = 0L;
+    private volatile int score = 0;
+    private volatile int consecutiveCorrect = 0;
+    private volatile int totalGestures = 0;
+    private volatile int correctGestures = 0;
+    private volatile float comboMultiplier = 1.0f;
+    private volatile long roundStartTime = 0L;
+    private volatile boolean cameraReady = false;
+    private volatile String loadingMessage = "Initializing camera...";
+    private volatile float timeRemaining = 10.0f;
+    private volatile long lastTimerCheckMs = 0L;
+    private static final long TIMER_CHECK_INTERVAL_MS = 100L;  // Check timer every 100ms
+    private volatile long lastCorrectGestureTimeMs = 0L;
+    private static final long CORRECT_GESTURE_COOLDOWN_MS = 1500L;  // Breathing time after correct gesture
+
+    // Gesture ID to name mapping (matches Python backend)
+    private String getGestureName(int gestureId) {
+        switch (gestureId) {
+            case 1: return "peace";
+            case 2: return "ok";
+            case 4: return "highfive";
+            case 5: return "fist";
+            case 6: return "point";
+            case 7: return "rock";
+            case 10: return "iloveyou";
+            default: return null;
+        }
+    }
+    
+    private String getGestureDisplayName(int gestureId) {
+        switch (gestureId) {
+            case 1: return "Peace";
+            case 2: return "OK";
+            case 4: return "HighFive";
+            case 5: return "Fist";
+            case 6: return "Point";
+            case 7: return "Rock";
+            case 10: return "ILoveYou";
+            default: return "Unknown";
+        }
+    }
 
     @Override
     public void show() {
@@ -61,19 +97,23 @@ public class GameOneScreen implements Screen {
         Gdx.input.setInputProcessor(stage);
         skin = Assets.manager.get("ui/uiskin.json", Skin.class);
 
-        gameUiTexture = Assets.manager.get("ui/game/game_one_ui.png", Texture.class);
-        gameUiImage = new Image(gameUiTexture);
-        stage.addActor(gameUiImage);
+        // Load gesture textures
+        gestureTextures = new java.util.HashMap<>();
+        gestureTextures.put("fist", Assets.manager.get("game/gesture/fist.png", Texture.class));
+        gestureTextures.put("highfive", Assets.manager.get("game/gesture/highfive.png", Texture.class));
+        gestureTextures.put("iloveyou", Assets.manager.get("game/gesture/iloveyou.png", Texture.class));
+        gestureTextures.put("ok", Assets.manager.get("game/gesture/ok.png", Texture.class));
+        gestureTextures.put("peace", Assets.manager.get("game/gesture/peace.png", Texture.class));
+        gestureTextures.put("point", Assets.manager.get("game/gesture/point.png", Texture.class));
+        gestureTextures.put("rock", Assets.manager.get("game/gesture/rock.png", Texture.class));
 
+        // Create back button in top-left corner
         uiPanel = new Table();
-        uiPanel.setSize(UI_PANEL_WIDTH, UI_PANEL_HEIGHT);
-        uiPanel.setPosition(UI_PANEL_LEFT_PADDING, 0f);
-        uiPanel.bottom().center();
+        uiPanel.setFillParent(true);
+        uiPanel.top().left().pad(20f);
         ImageButton backButton = createBackButton();
-        uiPanel.add(backButton).width(EXIT_BUTTON_WIDTH).height(EXIT_BUTTON_HEIGHT).padBottom(24f);
+        uiPanel.add(backButton).width(EXIT_BUTTON_WIDTH).height(EXIT_BUTTON_HEIGHT);
         stage.addActor(uiPanel);
-
-        updateGameUiLayout();
 
         PythonBackendManager.startServer();
         pythonClient = new PythonBridgeClient("127.0.0.1", 9009);
@@ -87,7 +127,32 @@ public class GameOneScreen implements Screen {
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
         updateCameraTexture();
-        updateGameUiLayout();
+        checkTimerStatus();
+
+        // Show loading screen while camera initializes
+        if (!cameraReady) {
+            batch.begin();
+            font.getData().setScale(2.0f);
+            float textX = Gdx.graphics.getWidth() / 2f - 150f;
+            float textY = Gdx.graphics.getHeight() / 2f;
+            font.draw(batch, loadingMessage, textX, textY);
+            
+            // Show dots animation
+            int dots = (int)((System.currentTimeMillis() / 500) % 4);
+            String dotString = "";
+            for (int i = 0; i < dots; i++) {
+                dotString += ".";
+            }
+            font.draw(batch, dotString, textX + 300f, textY);
+            
+            font.getData().setScale(1.0f);
+            font.draw(batch, "Please wait...", textX + 20f, textY - 50f);
+            batch.end();
+            
+            stage.act(delta);
+            stage.draw();
+            return;
+        }
 
         batch.begin();
         if (cameraTexture != null) {
@@ -103,6 +168,24 @@ public class GameOneScreen implements Screen {
         } else {
             font.draw(batch, "Waiting for Python camera feed...", 20, Gdx.graphics.getHeight() - 20);
         }
+        // Draw scoring UI
+        font.getData().setScale(2.0f);
+        font.draw(batch, "Score: " + score, 20, Gdx.graphics.getHeight() - 80);
+        
+        // Draw timer
+        font.getData().setScale(2.5f);
+        int timeInt = (int)Math.ceil(timeRemaining);
+        String timerColor = timeRemaining < 3.0f ? "[RED]" : timeRemaining < 6.0f ? "[YELLOW]" : "[GREEN]";
+        font.draw(batch, "Time: " + timeInt + "s", 20, Gdx.graphics.getHeight() - 130);
+        
+        font.getData().setScale(1.5f);
+        if (comboMultiplier > 1.0f) {
+            font.draw(batch, "Combo: x" + String.format("%.1f", comboMultiplier), 20, Gdx.graphics.getHeight() - 180);
+        }
+        if (correctGestures > 0 || totalGestures > 0) {
+            font.draw(batch, "Accuracy: " + correctGestures + "/" + totalGestures, 20, Gdx.graphics.getHeight() - 220);
+        }
+        font.getData().setScale(1.0f);
         if (gameStatusMessage != null && !gameStatusMessage.isEmpty()) {
             font.draw(batch, gameStatusMessage, 20, 40);
         }
@@ -115,6 +198,21 @@ public class GameOneScreen implements Screen {
         if (gameProgressText != null && !gameProgressText.isEmpty()) {
             font.draw(batch, gameProgressText, 20, 130);
         }
+        
+        // Draw expected gesture image
+        if (expectedGestureName != null && gestureTextures.containsKey(expectedGestureName.toLowerCase())) {
+            Texture gestureTexture = gestureTextures.get(expectedGestureName.toLowerCase());
+            float gestureSize = 256f;
+            float gestureX = Gdx.graphics.getWidth() - gestureSize - 50f;
+            float gestureY = Gdx.graphics.getHeight() - gestureSize - 50f;
+            batch.draw(gestureTexture, gestureX, gestureY, gestureSize, gestureSize);
+            
+            // Draw label above the gesture
+            font.getData().setScale(1.5f);
+            font.draw(batch, "Expected:", gestureX, gestureY + gestureSize + 30f);
+            font.getData().setScale(1.0f);
+        }
+        
         batch.end();
 
         stage.act(delta);
@@ -126,7 +224,6 @@ public class GameOneScreen implements Screen {
         if (stage != null) {
             stage.getViewport().update(width, height, true);
         }
-        updateGameUiLayout();
     }
 
     @Override
@@ -172,6 +269,54 @@ public class GameOneScreen implements Screen {
                 }
             }
         );
+    }
+    
+    private void checkTimerStatus() {
+        if (!gameLogicReady) {
+            return;
+        }
+        
+        long now = System.currentTimeMillis();
+        if (now - lastTimerCheckMs < TIMER_CHECK_INTERVAL_MS) {
+            return;
+        }
+        lastTimerCheckMs = now;
+        
+        try {
+            pythonClient.connect(2000);
+            String response = pythonClient.sendRequest("game_state", "{}");
+            JsonValue json = jsonReader.parse(response);
+            if (json != null && json.getBoolean("ok", false)) {
+                JsonValue data = json.get("data");
+                if (data != null) {
+                    // Update time remaining
+                    float newTimeRemaining = data.getFloat("time_remaining", 10.0f);
+                    if (newTimeRemaining > timeRemaining + 5.0f) {
+                        // New round started (timer reset to 10)
+                        JsonValue seq = data.get("sequence");
+                        if (seq != null) {
+                            gameSequenceText = "Sequence: " + formatSequence(seq);
+                        }
+                    }
+                    timeRemaining = newTimeRemaining;
+                    
+                    // Update expected gesture
+                    JsonValue expected = data.get("expected");
+                    if (expected != null && expected.isNumber()) {
+                        int expectedId = expected.asInt();
+                        expectedGestureName = getGestureName(expectedId);
+                        gameExpectedText = "Expected: " + (expectedGestureName != null ? getGestureDisplayName(expectedId) : String.valueOf(expectedId));
+                    }
+                    
+                    // Update progress
+                    JsonValue progress = data.get("progress");
+                    if (progress != null && progress.isArray() && progress.size >= 2) {
+                        gameProgressText = "Progress: " + progress.get(0).asString() + "/" + progress.get(1).asString();
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     private void startFrameThread() {
@@ -221,6 +366,12 @@ public class GameOneScreen implements Screen {
         }
 
         long now = System.currentTimeMillis();
+        
+        // Check for cooldown after correct gesture (breathing time)
+        if (lastCorrectGestureTimeMs > 0 && (now - lastCorrectGestureTimeMs) < CORRECT_GESTURE_COOLDOWN_MS) {
+            return;  // Still in cooldown period, ignore all gestures
+        }
+        
         if (gestureId == lastGestureId && (now - lastGestureTimeMs) < 700) {
             return;
         }
@@ -235,18 +386,116 @@ public class GameOneScreen implements Screen {
             if (json != null && json.getBoolean("ok", false)) {
                 JsonValue gameData = json.get("data");
                 if (gameData != null) {
+                    JsonValue result = gameData.get("result");
                     JsonValue stats = gameData.get("stats");
                     JsonValue expected = gameData.get("expected");
                     JsonValue progress = gameData.get("progress");
-                    if (expected != null) {
-                        gameExpectedText = "Expected: " + expected.asString();
+                    
+                    // Update time remaining
+                    if (gameData.has("time_remaining")) {
+                        timeRemaining = gameData.getFloat("time_remaining", 10.0f);
                     }
+                    
+                    // Check for new sequence (round completed or timer expired)
+                    if (gameData.has("sequence")) {
+                        JsonValue newSeq = gameData.get("sequence");
+                        gameSequenceText = "Sequence: " + formatSequence(newSeq);
+                    }
+                    
+                    // Get correct status from result object
+                    boolean isCorrect = false;
+                    boolean isComplete = false;
+                    boolean isMistake = false;
+                    boolean timeExpired = false;
+                    if (result != null) {
+                        isCorrect = result.getBoolean("valid", false);
+                        isComplete = result.getBoolean("complete", false);
+                        isMistake = result.getBoolean("mistake", false);
+                        timeExpired = result.getBoolean("time_expired", false);
+                    }
+                    
+                    // Update expected gesture
+                    if (expected != null && expected.isNumber()) {
+                        int expectedId = expected.asInt();
+                        expectedGestureName = getGestureName(expectedId);
+                        gameExpectedText = "Expected: " + (expectedGestureName != null ? getGestureDisplayName(expectedId) : String.valueOf(expectedId));
+                    }
+                    
+                    // Update progress
                     if (progress != null && progress.isArray() && progress.size >= 2) {
                         gameProgressText = "Progress: " + progress.get(0).asString() + "/" + progress.get(1).asString();
                     }
+                    
+                    // Handle time expired
+                    if (timeExpired) {
+                        gameStatusMessage = "Time's Up! Next round starting...";
+                        consecutiveCorrect = 0;
+                        comboMultiplier = 1.0f;
+                        lastCorrectGestureTimeMs = 0L;  // Reset cooldown for new round
+                        return;
+                    }
+                    
+                    // Handle mistake - player must restart sequence
+                    if (isMistake) {
+                        gameStatusMessage = "Wrong gesture! Start over - " + getGestureDisplayName(gestureId) + " was incorrect";
+                        consecutiveCorrect = 0;
+                        comboMultiplier = 1.0f;
+                        score = Math.max(0, score - 50);
+                        totalGestures++;
+                        lastCorrectGestureTimeMs = 0L;  // Reset cooldown so player can try again immediately
+                        return;
+                    }
+                    
+                    // Update scoring for correct gestures
+                    totalGestures++;
+                    if (isCorrect) {
+                        correctGestures++;
+                        consecutiveCorrect++;
+                        
+                        // Set cooldown after correct gesture
+                        lastCorrectGestureTimeMs = System.currentTimeMillis();
+                        
+                        // Calculate combo multiplier
+                        if (consecutiveCorrect >= 10) {
+                            comboMultiplier = 3.0f;
+                        } else if (consecutiveCorrect >= 5) {
+                            comboMultiplier = 2.0f;
+                        } else if (consecutiveCorrect >= 3) {
+                            comboMultiplier = 1.5f;
+                        } else {
+                            comboMultiplier = 1.0f;
+                        }
+                        
+                        // Base points
+                        int points = (int)(100 * comboMultiplier);
+                        
+                        // Speed bonus (if responded quickly)
+                        long timeSinceStart = System.currentTimeMillis() - roundStartTime;
+                        if (timeSinceStart < 2000 && timeSinceStart > 0) {
+                            points += 50;
+                        }
+                        
+                        score += points;
+                        gameStatusMessage = "Correct! +" + points + " points";
+                        
+                        // Check for round completion
+                        if (isComplete) {
+                            gameStatusMessage = "Round Complete! +" + points + " points - Next round!";
+                            // Reset cooldown for new round
+                            lastCorrectGestureTimeMs = 0L;
+                        }
+                    }
+                    
+                    roundStartTime = System.currentTimeMillis();
+                    
                     if (stats != null) {
-                        int score = stats.getInt("score", 0);
-                        gameStatusMessage = "Score: " + score;
+                        // Check for level completion
+                        boolean gameOver = stats.getBoolean("game_over", false);
+                        boolean won = stats.getBoolean("won", false);
+                        if (gameOver && won) {
+                            score += 500;
+                            gameStatusMessage = "Game Complete! +500 bonus - You Won!";
+                        }
                     }
                 }
             }
@@ -270,10 +519,22 @@ public class GameOneScreen implements Screen {
                 gameStatusMessage = "Python game logic ready";
                 JsonValue data = json.get("data");
                 if (data != null) {
+                    // Get initial time remaining
+                    if (data.has("time_remaining")) {
+                        timeRemaining = data.getFloat("time_remaining", 10.0f);
+                    }
+                    
                     JsonValue seq = data.get("sequence");
                     gameSequenceText = "Sequence: " + formatSequence(seq);
                     JsonValue expected = data.get("expected");
-                    gameExpectedText = expected == null ? "Expected: -" : "Expected: " + expected.asString();
+                    if (expected != null && expected.isNumber()) {
+                        int expectedId = expected.asInt();
+                        expectedGestureName = getGestureName(expectedId);
+                        gameExpectedText = "Expected: " + (expectedGestureName != null ? getGestureDisplayName(expectedId) : String.valueOf(expectedId));
+                    } else {
+                        expectedGestureName = null;
+                        gameExpectedText = "Expected: -";
+                    }
                     JsonValue progress = data.get("progress");
                     if (progress != null && progress.isArray() && progress.size >= 2) {
                         gameProgressText = "Progress: " + progress.get(0).asString() + "/" + progress.get(1).asString();
@@ -313,7 +574,13 @@ public class GameOneScreen implements Screen {
             if (i > 0) {
                 builder.append(", ");
             }
-            builder.append(seq.get(i).asString());
+            // Convert gesture ID to display name
+            if (seq.get(i).isNumber()) {
+                int gestureId = seq.get(i).asInt();
+                builder.append(getGestureDisplayName(gestureId));
+            } else {
+                builder.append(seq.get(i).asString());
+            }
         }
         return builder.toString();
     }
@@ -343,24 +610,13 @@ public class GameOneScreen implements Screen {
             cameraTexture = new Texture(pixmap);
             pixmap.dispose();
             processedFrameBase64 = currentBase64;
+            
+            // Mark camera as ready once first frame is received
+            if (!cameraReady) {
+                cameraReady = true;
+                loadingMessage = "Camera ready!";
+            }
         } catch (Exception ignored) {
-        }
-    }
-
-    private void updateGameUiLayout() {
-        if (gameUiImage == null) {
-            return;
-        }
-        float width = Gdx.graphics.getWidth();
-        float height = Gdx.graphics.getHeight();
-        gameUiImage.setSize(width, height);
-        gameUiImage.setPosition(0f, 0f);
-        gameUiImage.setZIndex(0);
-
-        if (uiPanel != null) {
-            float panelY = Math.max(0f, (height - UI_PANEL_HEIGHT) / 2f);
-            uiPanel.setSize(UI_PANEL_WIDTH, UI_PANEL_HEIGHT);
-            uiPanel.setPosition(UI_PANEL_LEFT_PADDING, panelY);
         }
     }
 }

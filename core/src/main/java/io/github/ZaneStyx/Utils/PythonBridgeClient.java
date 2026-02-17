@@ -31,9 +31,10 @@ public class PythonBridgeClient implements AutoCloseable {
     }
 
     public void connect(int timeoutMillis) throws IOException {
-        if (socket != null && socket.isConnected()) {
+        if (socket != null && socket.isConnected() && !socket.isClosed()) {
             return;
         }
+        closeInternal();
         socket = new Socket();
         socket.connect(new InetSocketAddress(host, port), timeoutMillis);
         reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
@@ -53,7 +54,12 @@ public class PythonBridgeClient implements AutoCloseable {
         String request = "{\"method\":\"" + escape(method) + "\",\"payload\":" + payload + "}\n";
         writer.write(request);
         writer.flush();
-        return reader.readLine();
+        String response = reader.readLine();
+        if (response == null) {
+            closeInternal();
+            throw new IOException("connection_closed");
+        }
+        return response;
     }
 
     private void ensureConnected() throws IOException {
@@ -68,14 +74,21 @@ public class PythonBridgeClient implements AutoCloseable {
 
     @Override
     public void close() throws IOException {
+        closeInternal();
+    }
+
+    private void closeInternal() throws IOException {
         if (writer != null) {
             writer.close();
+            writer = null;
         }
         if (reader != null) {
             reader.close();
+            reader = null;
         }
         if (socket != null) {
             socket.close();
+            socket = null;
         }
     }
 }

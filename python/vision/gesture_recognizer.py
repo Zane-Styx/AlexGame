@@ -57,7 +57,7 @@ class GestureRecognizer:
     
     PALM_CENTER = 0
     
-    def __init__(self, confidence_threshold: float = 0.6, enable_smoothing: bool = True):
+    def __init__(self, confidence_threshold: float = 0.75, enable_smoothing: bool = True):
         """
         Initialize gesture recognizer.
         
@@ -69,7 +69,7 @@ class GestureRecognizer:
         self.enable_smoothing = enable_smoothing
         self.previous_gesture = None
         self.consecutive_count = 0
-        self.stability_frames = 2 if enable_smoothing else 1  # Require consistency
+        self.stability_frames = 5 if enable_smoothing else 1  # Require 5 frames (~150ms at 30fps)
         
         # Temporal smoothing buffer
         self.gesture_history = []  # Last N gestures
@@ -167,7 +167,7 @@ class GestureRecognizer:
         """
         Determine which fingers are extended using vectorized operations.
         
-       Returns:
+        Returns:
             [thumb_up, index_up, middle_up, ring_up, pinky_up]
         """
         # Convert to numpy for faster operations
@@ -178,18 +178,18 @@ class GestureRecognizer:
         
         fingers_up = []
         
-        # Thumb: special case, check x-direction
-        thumb_extended = landmarks_array[self.THUMB_TIP, 0] < landmarks_array[self.THUMB_IP, 0] - 0.02
+        # Thumb: special case, check x-direction (more strict)
+        thumb_extended = landmarks_array[self.THUMB_TIP, 0] < landmarks_array[self.THUMB_IP, 0] - 0.025
         fingers_up.append(bool(thumb_extended))
         
-        # Other fingers: y-direction (tip above PIP) - vectorized
+        # Other fingers: y-direction (tip above PIP) - vectorized (stricter threshold)
         finger_tips = np.array([self.INDEX_TIP, self.MIDDLE_TIP, self.RING_TIP, self.PINKY_TIP])
         finger_pips = np.array([self.INDEX_PIP, self.MIDDLE_PIP, self.RING_PIP, self.PINKY_PIP])
         
         # Vectorized comparison
         tip_y = landmarks_array[finger_tips, 1]
         pip_y = landmarks_array[finger_pips, 1]
-        extended = tip_y < (pip_y - 0.02)
+        extended = tip_y < (pip_y - 0.025)
         
         fingers_up.extend(extended.tolist())
         return fingers_up
@@ -204,8 +204,8 @@ class GestureRecognizer:
             (thumb_tip[1] - index_tip[1]) ** 2
         ) ** 0.5
         
-        # Touching if distance < 0.05 (normalized coords)
-        return distance < 0.05
+        # Touching if distance < 0.035 (normalized coords) - stricter threshold
+        return distance < 0.035
     
     def _calculate_gesture_confidence(self, landmarks: list, fingers_up: list) -> float:
         """Calculate confidence score based on landmark quality and finger extension clarity."""
@@ -217,9 +217,16 @@ class GestureRecognizer:
         
         for i, (tip_idx, pip_idx) in enumerate(zip(finger_tips, finger_pips)):
             y_diff = abs(landmarks[tip_idx][1] - landmarks[pip_idx][1])
-            # Penalize ambiguous positions (close to threshold)
-            if 0.01 < y_diff < 0.04:
-                confidence *= 0.9
+            # Strongly penalize ambiguous positions (close to threshold)
+            if 0.015 < y_diff < 0.035:
+                confidence *= 0.85
+            elif 0.01 < y_diff < 0.015 or 0.035 < y_diff < 0.04:
+                confidence *= 0.75
+        
+        # Additional penalty for gestures near the image edge (less reliable)
+        palm = landmarks[self.PALM_CENTER]
+        if palm[0] < 0.1 or palm[0] > 0.9 or palm[1] < 0.1 or palm[1] > 0.9:
+            confidence *= 0.90
         
         return confidence
     

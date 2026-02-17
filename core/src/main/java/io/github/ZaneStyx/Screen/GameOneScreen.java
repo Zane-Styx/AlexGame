@@ -6,7 +6,6 @@ import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
-import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.scenes.scene2d.Stage;
 import com.badlogic.gdx.scenes.scene2d.ui.ImageButton;
@@ -19,13 +18,14 @@ import com.badlogic.gdx.utils.viewport.ScreenViewport;
 import io.github.ZaneStyx.Utils.Assets;
 import io.github.ZaneStyx.Utils.PythonBackendManager;
 import io.github.ZaneStyx.Utils.PythonBridgeClient;
+import io.github.ZaneStyx.Utils.SpriteFontManager;
+import io.github.ZaneStyx.Utils.SpriteLabel;
 import io.github.ZaneStyx.Utils.UIHelper;
 
 import java.util.Base64;
 
 public class GameOneScreen implements Screen {
     private SpriteBatch batch;
-    private BitmapFont font;
     private Stage stage;
     private Skin skin;
     private PythonBridgeClient pythonClient;
@@ -35,6 +35,20 @@ public class GameOneScreen implements Screen {
     private String processedFrameBase64;
     private Texture cameraTexture;
     private Table uiPanel;
+    private Table hudTable;
+    private Table loadingTable;
+    private Table sequenceIconsTable;
+    private SpriteLabel scoreLabel;
+    private SpriteLabel timerLabel;
+    private SpriteLabel comboLabel;
+    private SpriteLabel accuracyLabel;
+    private SpriteLabel statusLabel;
+    private SpriteLabel sequenceLabel;
+    private SpriteLabel expectedLabel;
+    private SpriteLabel progressLabel;
+    private SpriteLabel loadingLabel;
+    private SpriteLabel loadingDotsLabel;
+    private SpriteLabel loadingHintLabel;
     private java.util.HashMap<String, Texture> gestureTextures;
     private volatile String expectedGestureName = null;
     private final JsonReader jsonReader = new JsonReader();
@@ -60,6 +74,13 @@ public class GameOneScreen implements Screen {
     private static final long TIMER_CHECK_INTERVAL_MS = 100L;  // Check timer every 100ms
     private volatile long lastCorrectGestureTimeMs = 0L;
     private static final long CORRECT_GESTURE_COOLDOWN_MS = 1500L;  // Breathing time after correct gesture
+    private volatile long lastReconnectAttemptMs = 0L;
+    private static final long RECONNECT_INTERVAL_MS = 2000L;
+    private static final float HUD_RIGHT_WIDTH = 460f;
+    private static final float HUD_TOP_PAD = 340f;
+    private static final float LOADING_TOP_PAD = 160f;
+    private static final float SEQUENCE_ICON_SIZE = 44f;
+    private static final float SEQUENCE_ICON_PAD = 6f;
 
     // Gesture ID to name mapping (matches Python backend)
     private String getGestureName(int gestureId) {
@@ -91,11 +112,14 @@ public class GameOneScreen implements Screen {
     @Override
     public void show() {
         batch = new SpriteBatch();
-        font = new BitmapFont();
 
         stage = new Stage(new ScreenViewport());
         Gdx.input.setInputProcessor(stage);
         skin = Assets.manager.get("ui/uiskin.json", Skin.class);
+
+        if (!SpriteFontManager.isLoaded(UIHelper.DEFAULT_SPRITE_FONT)) {
+            SpriteFontManager.load(UIHelper.DEFAULT_SPRITE_FONT, "ui/ctm.uiskin.png");
+        }
 
         // Load gesture textures
         gestureTextures = new java.util.HashMap<>();
@@ -110,10 +134,13 @@ public class GameOneScreen implements Screen {
         // Create back button in top-left corner
         uiPanel = new Table();
         uiPanel.setFillParent(true);
-        uiPanel.top().left().pad(20f);
+        uiPanel.top().right().pad(20f);
         ImageButton backButton = createBackButton();
         uiPanel.add(backButton).width(EXIT_BUTTON_WIDTH).height(EXIT_BUTTON_HEIGHT);
         stage.addActor(uiPanel);
+
+        buildHud();
+        buildLoadingUi();
 
         PythonBackendManager.startServer();
         pythonClient = new PythonBridgeClient("127.0.0.1", 9009);
@@ -129,26 +156,16 @@ public class GameOneScreen implements Screen {
         updateCameraTexture();
         checkTimerStatus();
 
+        updateHudText();
+        if (loadingTable != null) {
+            loadingTable.setVisible(!cameraReady);
+        }
+        if (hudTable != null) {
+            hudTable.setVisible(cameraReady);
+        }
+
         // Show loading screen while camera initializes
         if (!cameraReady) {
-            batch.begin();
-            font.getData().setScale(2.0f);
-            float textX = Gdx.graphics.getWidth() / 2f - 150f;
-            float textY = Gdx.graphics.getHeight() / 2f;
-            font.draw(batch, loadingMessage, textX, textY);
-            
-            // Show dots animation
-            int dots = (int)((System.currentTimeMillis() / 500) % 4);
-            String dotString = "";
-            for (int i = 0; i < dots; i++) {
-                dotString += ".";
-            }
-            font.draw(batch, dotString, textX + 300f, textY);
-            
-            font.getData().setScale(1.0f);
-            font.draw(batch, "Please wait...", textX + 20f, textY - 50f);
-            batch.end();
-            
             stage.act(delta);
             stage.draw();
             return;
@@ -166,37 +183,7 @@ public class GameOneScreen implements Screen {
             int srcY = (srcH - cropSize) / 2;
             batch.draw(cameraTexture, x, y, targetSize, targetSize, srcX, srcY, cropSize, cropSize, false, false);
         } else {
-            font.draw(batch, "Waiting for Python camera feed...", 20, Gdx.graphics.getHeight() - 20);
-        }
-        // Draw scoring UI
-        font.getData().setScale(2.0f);
-        font.draw(batch, "Score: " + score, 20, Gdx.graphics.getHeight() - 80);
-        
-        // Draw timer
-        font.getData().setScale(2.5f);
-        int timeInt = (int)Math.ceil(timeRemaining);
-        String timerColor = timeRemaining < 3.0f ? "[RED]" : timeRemaining < 6.0f ? "[YELLOW]" : "[GREEN]";
-        font.draw(batch, "Time: " + timeInt + "s", 20, Gdx.graphics.getHeight() - 130);
-        
-        font.getData().setScale(1.5f);
-        if (comboMultiplier > 1.0f) {
-            font.draw(batch, "Combo: x" + String.format("%.1f", comboMultiplier), 20, Gdx.graphics.getHeight() - 180);
-        }
-        if (correctGestures > 0 || totalGestures > 0) {
-            font.draw(batch, "Accuracy: " + correctGestures + "/" + totalGestures, 20, Gdx.graphics.getHeight() - 220);
-        }
-        font.getData().setScale(1.0f);
-        if (gameStatusMessage != null && !gameStatusMessage.isEmpty()) {
-            font.draw(batch, gameStatusMessage, 20, 40);
-        }
-        if (gameSequenceText != null && !gameSequenceText.isEmpty()) {
-            font.draw(batch, gameSequenceText, 20, 70);
-        }
-        if (gameExpectedText != null && !gameExpectedText.isEmpty()) {
-            font.draw(batch, gameExpectedText, 20, 100);
-        }
-        if (gameProgressText != null && !gameProgressText.isEmpty()) {
-            font.draw(batch, gameProgressText, 20, 130);
+            // No camera frame yet; HUD will show status on the right.
         }
         
         // Draw expected gesture image
@@ -206,11 +193,6 @@ public class GameOneScreen implements Screen {
             float gestureX = Gdx.graphics.getWidth() - gestureSize - 50f;
             float gestureY = Gdx.graphics.getHeight() - gestureSize - 50f;
             batch.draw(gestureTexture, gestureX, gestureY, gestureSize, gestureSize);
-            
-            // Draw label above the gesture
-            font.getData().setScale(1.5f);
-            font.draw(batch, "Expected:", gestureX, gestureY + gestureSize + 30f);
-            font.getData().setScale(1.0f);
         }
         
         batch.end();
@@ -247,7 +229,6 @@ public class GameOneScreen implements Screen {
     @Override
     public void dispose() {
         try { if (batch != null) batch.dispose(); } catch (Exception ignored) {}
-        try { if (font != null) font.dispose(); } catch (Exception ignored) {}
         try { if (stage != null) stage.dispose(); } catch (Exception ignored) {}
         try { if (cameraTexture != null) cameraTexture.dispose(); } catch (Exception ignored) {}
         try { if (pythonClient != null) pythonClient.close(); } catch (Exception ignored) {}
@@ -270,9 +251,129 @@ public class GameOneScreen implements Screen {
             }
         );
     }
+
+    private void buildHud() {
+        hudTable = new Table();
+        hudTable.setFillParent(true);
+        hudTable.top().right().padTop(HUD_TOP_PAD).padRight(20f);
+
+        scoreLabel = createRightLabel("Score: 0", 2.6f);
+        timerLabel = createRightLabel("Time: 10s", 3.0f);
+        comboLabel = createRightLabel("", 2.0f);
+        accuracyLabel = createRightLabel("", 2.0f);
+        statusLabel = createRightLabel("", 1.4f);
+        sequenceLabel = createRightLabel("", 1.4f);
+        expectedLabel = createRightLabel("", 1.4f);
+        progressLabel = createRightLabel("", 1.4f);
+
+        sequenceIconsTable = new Table();
+        sequenceIconsTable.right();
+
+        hudTable.add(scoreLabel).right().width(HUD_RIGHT_WIDTH).padBottom(10f).row();
+        hudTable.add(timerLabel).right().width(HUD_RIGHT_WIDTH).padBottom(10f).row();
+        hudTable.add(comboLabel).right().width(HUD_RIGHT_WIDTH).padBottom(6f).row();
+        hudTable.add(accuracyLabel).right().width(HUD_RIGHT_WIDTH).padBottom(12f).row();
+        hudTable.add(statusLabel).right().width(HUD_RIGHT_WIDTH).padBottom(6f).row();
+        hudTable.add(sequenceLabel).right().width(HUD_RIGHT_WIDTH).padBottom(4f).row();
+        hudTable.add(sequenceIconsTable).right().width(HUD_RIGHT_WIDTH).padBottom(8f).row();
+        hudTable.add(expectedLabel).right().width(HUD_RIGHT_WIDTH).padBottom(6f).row();
+        hudTable.add(progressLabel).right().width(HUD_RIGHT_WIDTH).padBottom(6f).row();
+
+        stage.addActor(hudTable);
+    }
+
+    private void buildLoadingUi() {
+        loadingTable = new Table();
+        loadingTable.setFillParent(true);
+        loadingTable.top().right().padTop(LOADING_TOP_PAD).padRight(20f);
+
+        loadingLabel = createRightLabel(loadingMessage, 2.6f);
+        loadingDotsLabel = createRightLabel("", 2.6f);
+        loadingHintLabel = createRightLabel("Please wait...", 1.4f);
+
+        loadingTable.add(loadingLabel).right().width(HUD_RIGHT_WIDTH).padBottom(6f).row();
+        loadingTable.add(loadingDotsLabel).right().width(HUD_RIGHT_WIDTH).padBottom(12f).row();
+        loadingTable.add(loadingHintLabel).right().width(HUD_RIGHT_WIDTH).padBottom(6f).row();
+
+        stage.addActor(loadingTable);
+    }
+
+    private SpriteLabel createRightLabel(String text, float scale) {
+        SpriteLabel label = UIHelper.createSpriteLabel(text, UIHelper.DEFAULT_SPRITE_FONT, scale);
+        if (label != null) {
+            label.setAlignment(SpriteLabel.Align.RIGHT);
+            label.setSize(HUD_RIGHT_WIDTH, label.getPrefHeight());
+        }
+        return label;
+    }
+
+    private void lockHudWidth(SpriteLabel label) {
+        if (label != null) {
+            label.setSize(HUD_RIGHT_WIDTH, label.getPrefHeight());
+        }
+    }
+
+    private void updateHudText() {
+        if (scoreLabel != null) {
+            scoreLabel.setText("Score: " + score);
+            lockHudWidth(scoreLabel);
+        }
+        if (timerLabel != null) {
+            int timeInt = (int) Math.ceil(timeRemaining);
+            timerLabel.setText("Time: " + timeInt + "s");
+            lockHudWidth(timerLabel);
+        }
+        if (comboLabel != null) {
+            comboLabel.setText(comboMultiplier > 1.0f ? "Combo: x" + String.format("%.1f", comboMultiplier) : "");
+            lockHudWidth(comboLabel);
+        }
+        if (accuracyLabel != null) {
+            accuracyLabel.setText((correctGestures > 0 || totalGestures > 0) ?
+                "Accuracy: " + correctGestures + "/" + totalGestures : "");
+            lockHudWidth(accuracyLabel);
+        }
+        if (statusLabel != null) {
+            statusLabel.setText(gameStatusMessage != null ? gameStatusMessage : "");
+            lockHudWidth(statusLabel);
+        }
+        if (sequenceLabel != null) {
+            sequenceLabel.setText("Sequence:");
+            lockHudWidth(sequenceLabel);
+        }
+        if (expectedLabel != null) {
+            expectedLabel.setText(gameExpectedText != null ? gameExpectedText : "");
+            lockHudWidth(expectedLabel);
+        }
+        if (progressLabel != null) {
+            progressLabel.setText(gameProgressText != null ? gameProgressText : "");
+            lockHudWidth(progressLabel);
+        }
+        if (loadingLabel != null) {
+            loadingLabel.setText(loadingMessage != null ? loadingMessage : "");
+            lockHudWidth(loadingLabel);
+        }
+        if (loadingDotsLabel != null) {
+            int dots = (int) ((System.currentTimeMillis() / 500) % 4);
+            StringBuilder dotString = new StringBuilder();
+            for (int i = 0; i < dots; i++) {
+                dotString.append(".");
+            }
+            loadingDotsLabel.setText(dotString.toString());
+            lockHudWidth(loadingDotsLabel);
+        }
+        if (loadingHintLabel != null) {
+            loadingHintLabel.setText("Please wait...");
+            lockHudWidth(loadingHintLabel);
+        }
+    }
     
     private void checkTimerStatus() {
         if (!gameLogicReady) {
+            long now = System.currentTimeMillis();
+            if (now - lastReconnectAttemptMs >= RECONNECT_INTERVAL_MS) {
+                lastReconnectAttemptMs = now;
+                initializeGameLogic();
+            }
             return;
         }
         
@@ -296,6 +397,7 @@ public class GameOneScreen implements Screen {
                         JsonValue seq = data.get("sequence");
                         if (seq != null) {
                             gameSequenceText = "Sequence: " + formatSequence(seq);
+                            updateSequenceIcons(seq);
                         }
                     }
                     timeRemaining = newTimeRemaining;
@@ -316,6 +418,8 @@ public class GameOneScreen implements Screen {
                 }
             }
         } catch (Exception ignored) {
+            gameLogicReady = false;
+            gameStatusMessage = buildBackendStatusMessage();
         }
     }
 
@@ -400,6 +504,9 @@ public class GameOneScreen implements Screen {
                     if (gameData.has("sequence")) {
                         JsonValue newSeq = gameData.get("sequence");
                         gameSequenceText = "Sequence: " + formatSequence(newSeq);
+                        updateSequenceIcons(newSeq);
+                        // Reset round start time when new sequence begins
+                        roundStartTime = System.currentTimeMillis();
                     }
                     
                     // Get correct status from result object
@@ -431,7 +538,8 @@ public class GameOneScreen implements Screen {
                         gameStatusMessage = "Time's Up! Next round starting...";
                         consecutiveCorrect = 0;
                         comboMultiplier = 1.0f;
-                        lastCorrectGestureTimeMs = 0L;  // Reset cooldown for new round
+                        // Allow immediate input for new round
+                        lastCorrectGestureTimeMs = 0L;
                         return;
                     }
                     
@@ -442,7 +550,8 @@ public class GameOneScreen implements Screen {
                         comboMultiplier = 1.0f;
                         score = Math.max(0, score - 50);
                         totalGestures++;
-                        lastCorrectGestureTimeMs = 0L;  // Reset cooldown so player can try again immediately
+                        // Apply cooldown after mistake too (prevent repeated penalty for same gesture)
+                        lastCorrectGestureTimeMs = System.currentTimeMillis();
                         return;
                     }
                     
@@ -500,6 +609,8 @@ public class GameOneScreen implements Screen {
                 }
             }
         } catch (Exception ignored) {
+            gameLogicReady = false;
+            gameStatusMessage = buildBackendStatusMessage();
         }
     }
 
@@ -526,6 +637,7 @@ public class GameOneScreen implements Screen {
                     
                     JsonValue seq = data.get("sequence");
                     gameSequenceText = "Sequence: " + formatSequence(seq);
+                    updateSequenceIcons(seq);
                     JsonValue expected = data.get("expected");
                     if (expected != null && expected.isNumber()) {
                         int expectedId = expected.asInt();
@@ -583,6 +695,33 @@ public class GameOneScreen implements Screen {
             }
         }
         return builder.toString();
+    }
+
+    private void updateSequenceIcons(JsonValue seq) {
+        if (sequenceIconsTable == null) {
+            return;
+        }
+        sequenceIconsTable.clearChildren();
+        if (seq == null || !seq.isArray() || seq.size == 0) {
+            return;
+        }
+        for (int i = 0; i < seq.size; i++) {
+            if (!seq.get(i).isNumber()) {
+                continue;
+            }
+            int gestureId = seq.get(i).asInt();
+            String name = getGestureName(gestureId);
+            if (name == null || !gestureTextures.containsKey(name)) {
+                continue;
+            }
+            Texture texture = gestureTextures.get(name);
+            com.badlogic.gdx.scenes.scene2d.ui.Image icon = new com.badlogic.gdx.scenes.scene2d.ui.Image(texture);
+            sequenceIconsTable.add(icon)
+                .size(SEQUENCE_ICON_SIZE, SEQUENCE_ICON_SIZE)
+                .padLeft(SEQUENCE_ICON_PAD)
+                .padRight(SEQUENCE_ICON_PAD);
+        }
+        sequenceIconsTable.invalidateHierarchy();
     }
 
     private void stopFrameThread() {

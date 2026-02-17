@@ -203,6 +203,8 @@ class HandTracker:
             self._target_fps = 25
         
         self.last_hand_landmarks: Optional[HandLandmarks] = None
+        self.last_hand_seen_time = 0.0
+        self.hand_presence_timeout = 0.35
         self._last_detection_time = 0.0
         self._lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
@@ -330,9 +332,10 @@ class HandTracker:
                                         handedness=handedness,
                                         roi=self.current_roi
                                     )
+                                    self.last_hand_seen_time = now
                             else:
-                                # No hand detected - clear ROI and reset
-                                if now - self._last_detection_time > 0.5:
+                                # No hand detected - clear if hand has been missing for a short window
+                                if now - self.last_hand_seen_time > self.hand_presence_timeout:
                                     with self._lock:
                                         self.last_hand_landmarks = None
                                     self.current_roi = None
@@ -352,6 +355,9 @@ class HandTracker:
         """
         with self._lock:
             frame = self._latest_frame.copy() if self._latest_frame is not None else None
+            if self.last_hand_landmarks is not None:
+                if time.time() - self.last_hand_seen_time > self.hand_presence_timeout:
+                    self.last_hand_landmarks = None
             hand_landmarks = self.last_hand_landmarks
         return frame, hand_landmarks
     

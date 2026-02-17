@@ -77,7 +77,7 @@ class GestureMemoryGame:
         
         Returns:
             {
-                'valid': bool,  # Correct gesture
+                'valid': bool,  # Correct gesture (matches expected)
                 'complete': bool,  # Sequence complete
                 'correct_so_far': bool,  # Input matches sequence so far
                 'progress': (current, total),  # (3, 4) means 3 of 4
@@ -129,7 +129,7 @@ class GestureMemoryGame:
                 'correct_so_far': True,
                 'progress': (len(self.player_input), len(self.sequence)),
                 'expected': expected,
-                'mistake': False,
+                'mistake': False,  # Not a mistake, just no valid gesture yet
                 'time_expired': False,
                 'time_remaining': time_remaining,
             }
@@ -171,7 +171,8 @@ class GestureMemoryGame:
                     'time_remaining': time_remaining,
                 }
         else:
-            # Mistake - reset player input, let them try again until timer expires
+            # Mistake - wrong gesture was performed. Reset the sequence.
+            # Player must start from the beginning.
             self.player_input = []
             return {
                 'valid': False,
@@ -179,7 +180,7 @@ class GestureMemoryGame:
                 'correct_so_far': False,
                 'progress': (0, len(self.sequence)),
                 'expected': self.sequence[0],  # Start from beginning
-                'mistake': True,
+                'mistake': True,  # Explicitly mark as mistake
                 'time_expired': False,
                 'time_remaining': time_remaining,
             }

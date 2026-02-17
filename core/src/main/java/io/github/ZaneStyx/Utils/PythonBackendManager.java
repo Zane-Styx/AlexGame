@@ -51,6 +51,15 @@ public final class PythonBackendManager {
     }
 
     public static boolean waitForReady(int timeoutMillis) {
+        if (pythonServerProcess != null && !pythonServerProcess.isAlive()) {
+            try {
+                int exitCode = pythonServerProcess.exitValue();
+                lastStartError = "Python backend exited (code " + exitCode + ")";
+            } catch (IllegalThreadStateException ignored) {
+                lastStartError = "Python backend exited";
+            }
+            pythonServerProcess = null;
+        }
         long deadline = System.currentTimeMillis() + timeoutMillis;
         while (System.currentTimeMillis() < deadline) {
             try (PythonBridgeClient client = new PythonBridgeClient("127.0.0.1", 9009)) {

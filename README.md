@@ -14,14 +14,14 @@ This game features two unique hand gesture-controlled games that utilize real-ti
 1. **Sequence Display:** At the start of each round, 4 random gestures are shown on screen
 2. **Memorize:** Study the sequence (e.g., "Peace, OK, HighFive, Fist")
 3. **Perform:** Use your hand to perform each gesture in the exact order
-4. **Time Limit:** You have 10 seconds to complete the sequence
+4. **Time Limit:** You have 15 seconds to complete the sequence
 5. **Retry on Mistakes:** If you perform the wrong gesture, the sequence resets but the timer keeps running
 6. **Progress:** Successfully complete the sequence to advance to the next round with a new 4-gesture combination
 
 #### Game Rules
 - **Fixed Sequence Length:** Always 4 gestures per round
 - **All Gestures Used:** Any of the 7 gestures can appear (Peace, OK, HighFive, Fist, Point, Rock, ILoveYou)
-- **10-Second Timer:** Each round has exactly 10 seconds to complete
+- **10-Second Timer:** Each round has exactly 15 seconds to complete
 - **Cooldown Period:** After each correct gesture, there's a 1.5-second cooldown to give you time to change hand positions
 - **Mistakes Reset Progress:** Wrong gesture resets your progress in that sequence, but you can keep trying until time runs out
 - **Auto-Advance:** When timer expires OR sequence is completed, a new round starts immediately with a fresh sequence

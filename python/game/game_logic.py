@@ -12,14 +12,14 @@ class GestureMemoryGame:
     Gesture Memory Game logic.
     
     Player must repeat a random gesture sequence of 4 gestures.
-    Each round has a 10-second timer. Player can retry until time runs out.
+    Each round has a 15-second timer. Player can retry until time runs out.
     """
     
     # Fixed sequence length
     SEQUENCE_LENGTH = 4
     
     # Time limit per round (seconds)
-    TIME_LIMIT = 10.0
+    TIME_LIMIT = 15.0
     
     # All available gestures
     ALL_GESTURES = [1, 2, 4, 5, 6, 7, 10]  # Peace, OK, HighFive, Fist, Point, Rock, ILoveYou

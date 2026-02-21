@@ -298,10 +298,13 @@ class HandTracker:
                             if self.adaptive_performance:
                                 self._update_performance_metrics(detection_time)
 
-                            if detection_result.hand_landmarks and detection_result.handedness:
+                            if detection_result.hand_landmarks:
                                 landmarks_list = detection_result.hand_landmarks[0]
-                                handedness = detection_result.handedness[0][0].category_name
-                                confidence = detection_result.handedness[0][0].score
+                                handedness = "Unknown"
+                                confidence = 0.0
+                                if detection_result.handedness:
+                                    handedness = detection_result.handedness[0][0].category_name
+                                    confidence = detection_result.handedness[0][0].score
                                 
                                 # Convert to numpy array for vectorized operations
                                 landmarks_array = np.array([(lm.x, lm.y, lm.z) for lm in landmarks_list], 

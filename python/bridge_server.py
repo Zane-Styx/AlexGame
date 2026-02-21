@@ -157,18 +157,19 @@ class JsonLineHandler(socketserver.StreamRequestHandler):
 
         gesture_payload = {}
         hand_landmarks_payload = []
-        if hand_landmarks is not None and GestureRecognizer is not None:
-            with _gesture_lock:
-                global _gesture_recognizer
-                if _gesture_recognizer is None:
-                    _gesture_recognizer = GestureRecognizer()
-                result = _gesture_recognizer.recognize(hand_landmarks)
-                gesture_payload = {
-                    "gesture_id": result.gesture_id,
-                    "gesture_name": result.gesture_name,
-                    "confidence": float(result.confidence),
-                    "is_valid": bool(result.is_valid),
-                }
+        if hand_landmarks is not None:
+            if GestureRecognizer is not None:
+                with _gesture_lock:
+                    global _gesture_recognizer
+                    if _gesture_recognizer is None:
+                        _gesture_recognizer = GestureRecognizer()
+                    result = _gesture_recognizer.recognize(hand_landmarks)
+                    gesture_payload = {
+                        "gesture_id": result.gesture_id,
+                        "gesture_name": result.gesture_name,
+                        "confidence": float(result.confidence),
+                        "is_valid": bool(result.is_valid),
+                    }
             # Convert landmarks to normalized coordinates
             height, width = frame.shape[:2]
             for lm in hand_landmarks:
@@ -228,7 +229,7 @@ class JsonLineHandler(socketserver.StreamRequestHandler):
                     "sequence": _game.get_sequence_display(),
                     "expected": _game.get_next_expected(),
                     "progress": _game.get_progress(),
-                    "time_remaining": stats.get('time_remaining', 10.0),
+                    "time_remaining": stats.get('time_remaining', 15.0),
                 },
             }
 
@@ -249,7 +250,7 @@ class JsonLineHandler(socketserver.StreamRequestHandler):
                 "stats": stats,
                 "expected": _game.get_next_expected(),
                 "progress": _game.get_progress(),
-                "time_remaining": stats.get('time_remaining', 10.0),
+                "time_remaining": stats.get('time_remaining', 15.0),
             }
             
             # If a new sequence started, include it
@@ -283,7 +284,7 @@ class JsonLineHandler(socketserver.StreamRequestHandler):
                     "sequence": _game.get_sequence_display(),
                     "expected": _game.get_next_expected(),
                     "progress": _game.get_progress(),
-                    "time_remaining": stats.get('time_remaining', 10.0),
+                    "time_remaining": stats.get('time_remaining', 15.0),
                 },
             }
 

@@ -69,7 +69,7 @@ public class GameOneScreen implements Screen {
     private volatile long roundStartTime = 0L;
     private volatile boolean cameraReady = false;
     private volatile String loadingMessage = "Initializing camera...";
-    private volatile float timeRemaining = 10.0f;
+    private volatile float timeRemaining = 15.0f;
     private volatile long lastTimerCheckMs = 0L;
     private static final long TIMER_CHECK_INTERVAL_MS = 100L;  // Check timer every 100ms
     private volatile long lastCorrectGestureTimeMs = 0L;
@@ -258,7 +258,7 @@ public class GameOneScreen implements Screen {
         hudTable.top().right().padTop(HUD_TOP_PAD).padRight(20f);
 
         scoreLabel = createRightLabel("Score: 0", 2.6f);
-        timerLabel = createRightLabel("Time: 10s", 3.0f);
+        timerLabel = createRightLabel("Time: 15s", 3.0f);
         comboLabel = createRightLabel("", 2.0f);
         accuracyLabel = createRightLabel("", 2.0f);
         statusLabel = createRightLabel("", 1.4f);
@@ -333,7 +333,7 @@ public class GameOneScreen implements Screen {
             lockHudWidth(accuracyLabel);
         }
         if (statusLabel != null) {
-            statusLabel.setText(gameStatusMessage != null ? gameStatusMessage : "");
+            statusLabel.setText("");
             lockHudWidth(statusLabel);
         }
         if (sequenceLabel != null) {
@@ -391,9 +391,9 @@ public class GameOneScreen implements Screen {
                 JsonValue data = json.get("data");
                 if (data != null) {
                     // Update time remaining
-                    float newTimeRemaining = data.getFloat("time_remaining", 10.0f);
+                    float newTimeRemaining = data.getFloat("time_remaining", 15.0f);
                     if (newTimeRemaining > timeRemaining + 5.0f) {
-                        // New round started (timer reset to 10)
+                        // New round started (timer reset to 15)
                         JsonValue seq = data.get("sequence");
                         if (seq != null) {
                             gameSequenceText = "Sequence: " + formatSequence(seq);
@@ -426,8 +426,17 @@ public class GameOneScreen implements Screen {
     private void startFrameThread() {
         running = true;
         frameThread = new Thread(() -> {
+            boolean backendReady = false;
             while (running) {
                 try {
+                    if (!backendReady) {
+                        PythonBackendManager.startServer();
+                        backendReady = PythonBackendManager.waitForReady(4000);
+                        if (!backendReady) {
+                            Thread.sleep(250);
+                            continue;
+                        }
+                    }
                     pythonClient.connect(2000);
                     String response = pythonClient.sendRequest("get_frame", "{\"camera_id\":0,\"quality\":60,\"draw_skeleton\":true}");
                     JsonValue json = jsonReader.parse(response);
@@ -443,6 +452,7 @@ public class GameOneScreen implements Screen {
                     }
                     Thread.sleep(16);
                 } catch (Exception ignored) {
+                    backendReady = false;
                     try {
                         Thread.sleep(250);
                     } catch (InterruptedException ex) {
@@ -497,7 +507,7 @@ public class GameOneScreen implements Screen {
                     
                     // Update time remaining
                     if (gameData.has("time_remaining")) {
-                        timeRemaining = gameData.getFloat("time_remaining", 10.0f);
+                        timeRemaining = gameData.getFloat("time_remaining", 15.0f);
                     }
                     
                     // Check for new sequence (round completed or timer expired)
@@ -543,15 +553,8 @@ public class GameOneScreen implements Screen {
                         return;
                     }
                     
-                    // Handle mistake - player must restart sequence
+                    // Handle mistake - allow mistakes with no penalty
                     if (isMistake) {
-                        gameStatusMessage = "Wrong gesture! Start over - " + getGestureDisplayName(gestureId) + " was incorrect";
-                        consecutiveCorrect = 0;
-                        comboMultiplier = 1.0f;
-                        score = Math.max(0, score - 50);
-                        totalGestures++;
-                        // Apply cooldown after mistake too (prevent repeated penalty for same gesture)
-                        lastCorrectGestureTimeMs = System.currentTimeMillis();
                         return;
                     }
                     
@@ -632,7 +635,7 @@ public class GameOneScreen implements Screen {
                 if (data != null) {
                     // Get initial time remaining
                     if (data.has("time_remaining")) {
-                        timeRemaining = data.getFloat("time_remaining", 10.0f);
+                        timeRemaining = data.getFloat("time_remaining", 15.0f);
                     }
                     
                     JsonValue seq = data.get("sequence");

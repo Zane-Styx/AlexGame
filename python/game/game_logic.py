@@ -12,14 +12,14 @@ class GestureMemoryGame:
     Gesture Memory Game logic.
     
     Player must repeat a random gesture sequence of 4 gestures.
-    Each round has a 10-second timer. Player can retry until time runs out.
+    Each round has a 15-second timer. Player can retry until time runs out.
     """
     
     # Fixed sequence length
     SEQUENCE_LENGTH = 4
     
     # Time limit per round (seconds)
-    TIME_LIMIT = 10.0
+    TIME_LIMIT = 15.0
     
     # All available gestures
     ALL_GESTURES = [1, 2, 4, 5, 6, 7, 10]  # Peace, OK, HighFive, Fist, Point, Rock, ILoveYou
@@ -171,16 +171,14 @@ class GestureMemoryGame:
                     'time_remaining': time_remaining,
                 }
         else:
-            # Mistake - wrong gesture was performed. Reset the sequence.
-            # Player must start from the beginning.
-            self.player_input = []
+            # Mistake - ignore wrong gesture and keep current progress.
             return {
                 'valid': False,
                 'complete': False,
-                'correct_so_far': False,
-                'progress': (0, len(self.sequence)),
-                'expected': self.sequence[0],  # Start from beginning
-                'mistake': True,  # Explicitly mark as mistake
+                'correct_so_far': True,
+                'progress': (len(self.player_input), len(self.sequence)),
+                'expected': self.sequence[len(self.player_input)],
+                'mistake': False,
                 'time_expired': False,
                 'time_remaining': time_remaining,
             }

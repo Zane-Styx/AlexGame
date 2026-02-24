@@ -139,8 +139,8 @@ class JsonLineHandler(socketserver.StreamRequestHandler):
                 global _camera
                 if _camera is None or not _camera.isOpened():
                     _camera = cv2.VideoCapture(camera_id)
-                    _camera.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-                    _camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+                    _camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    _camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
                     _camera.set(cv2.CAP_PROP_FPS, 30)
                     _camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                     try:
@@ -270,22 +270,27 @@ class JsonLineHandler(socketserver.StreamRequestHandler):
             if _game is None:
                 return {"ok": False, "error": "game_not_started"}
 
+            # Check for timeout and handle it if needed
+            timeout_result = _game.check_and_handle_timeout()
+            
             stats = _game.get_stats()
             
-            # Check if timer expired and advance round if needed
-            if _game.is_time_expired() and not _game.game_over:
-                _game._advance_round()
-                stats = _game.get_stats()
+            response_data = {
+                "stats": stats,
+                "sequence": _game.get_sequence_display(),
+                "expected": _game.get_next_expected(),
+                "progress": _game.get_progress(),
+                "time_remaining": stats.get('time_remaining', 15.0),
+            }
+            
+            # If timeout occurred, include new sequence info
+            if timeout_result.get('timeout_occurred'):
+                response_data['timeout_occurred'] = True
+                response_data['sequence'] = timeout_result['new_sequence']
             
             return {
                 "ok": True,
-                "data": {
-                    "stats": stats,
-                    "sequence": _game.get_sequence_display(),
-                    "expected": _game.get_next_expected(),
-                    "progress": _game.get_progress(),
-                    "time_remaining": stats.get('time_remaining', 15.0),
-                },
+                "data": response_data,
             }
 
 

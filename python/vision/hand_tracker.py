@@ -204,7 +204,10 @@ class HandTracker:
         
         self.last_hand_landmarks: Optional[HandLandmarks] = None
         self.last_hand_seen_time = 0.0
-        self.hand_presence_timeout = 0.35
+        # Extended timeout: a brief detection miss (~350 ms) won't prematurely clear
+        # the hand state and disrupt the gesture recognizer.
+        self.hand_presence_timeout = 0.5
+        self._hand_was_present = False  # track transitions for debug prints
         self._last_detection_time = 0.0
         self._lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
@@ -336,8 +339,12 @@ class HandTracker:
                                         roi=self.current_roi
                                     )
                                     self.last_hand_seen_time = now
+                                # Debug: log when hand first appears
+                                if not self._hand_was_present:
+                                    print("[HandTracker] Hand detected")
+                                    self._hand_was_present = True
                             else:
-                                # No hand detected - clear if hand has been missing for a short window
+                                # No hand detected - clear only after extended timeout
                                 if now - self.last_hand_seen_time > self.hand_presence_timeout:
                                     with self._lock:
                                         self.last_hand_landmarks = None
@@ -345,8 +352,13 @@ class HandTracker:
                                     if self.kalman_filter is not None:
                                         self.kalman_filter.reset()
                                     self.previous_landmarks = None
+                                    # Debug: log when hand disappears
+                                    if self._hand_was_present:
+                                        print("[HandTracker] No hand detected")
+                                        self._hand_was_present = False
                     self._last_detection_time = now
-            except Exception:
+            except Exception as e:
+                print(f"[HandTracker] worker error: {e}")
                 time.sleep(0.005)
         
     def get_frame_and_landmarks(self) -> tuple[Optional[np.ndarray], Optional[HandLandmarks]]:

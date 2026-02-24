@@ -41,6 +41,7 @@ class GestureMemoryGame:
         self.won = False
         self.round_start_time = 0.0  # When current round started
         self.time_remaining = self.TIME_LIMIT
+        self.last_timeout_round = -1  # Track which round had timeout to prevent duplicates
         
         # Start first round
         self._advance_round()
@@ -68,6 +69,22 @@ class GestureMemoryGame:
         """Check if the current round's timer has expired."""
         return self.get_time_remaining() <= 0.0
     
+    def check_and_handle_timeout(self) -> dict:
+        """
+        Check if timer expired and handle it (advance round with penalty).
+        Returns dict with timeout info if timeout occurred and wasn't handled yet.
+        Only triggers once per round.
+        """
+        if self.is_time_expired() and len(self.player_input) < len(self.sequence) and self.current_round != self.last_timeout_round:
+            # Timer expired and sequence not complete - FAIL and advance
+            self.last_timeout_round = self.current_round
+            self._advance_round()
+            return {
+                'timeout_occurred': True,
+                'new_sequence': self.sequence.copy(),
+            }
+        return {'timeout_occurred': False}
+    
     def input_gesture(self, gesture_id: int) -> dict:
         """
         Process player gesture input.
@@ -90,20 +107,8 @@ class GestureMemoryGame:
         # Update time remaining
         time_remaining = self.get_time_remaining()
         
-        # Check if timer expired - if so, auto-advance to next round
-        if self.is_time_expired():
-            self._advance_round()
-            return {
-                'valid': False,
-                'complete': False,
-                'correct_so_far': False,
-                'progress': (0, len(self.sequence)),
-                'expected': self.sequence[0],
-                'mistake': False,
-                'time_expired': True,
-                'time_remaining': self.TIME_LIMIT,
-                'new_sequence': self.sequence.copy(),
-            }
+        # Don't auto-advance when timer expires - let player keep trying
+        # Timer hitting 0 just means no time bonus, but sequence stays the same
         
         # Already completed this round
         if len(self.player_input) >= len(self.sequence):
@@ -167,7 +172,6 @@ class GestureMemoryGame:
                     'progress': (len(self.player_input), len(self.sequence)),
                     'expected': self.sequence[len(self.player_input)] if len(self.player_input) < len(self.sequence) else None,
                     'mistake': False,
-                    'time_expired': False,
                     'time_remaining': time_remaining,
                 }
         else:
@@ -179,7 +183,6 @@ class GestureMemoryGame:
                 'progress': (len(self.player_input), len(self.sequence)),
                 'expected': self.sequence[len(self.player_input)],
                 'mistake': False,
-                'time_expired': False,
                 'time_remaining': time_remaining,
             }
     

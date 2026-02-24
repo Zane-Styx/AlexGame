@@ -55,6 +55,7 @@ public class GameOneScreen implements Screen {
     private static final float EXIT_BUTTON_WIDTH = 186f;
     private static final float EXIT_BUTTON_HEIGHT = 56f;
     private volatile boolean gameLogicReady;
+    private volatile boolean gameStarted = false;  // True once game_start has been sent successfully
     private volatile String gameStatusMessage = "Starting Python game logic...";
     private volatile String gameSequenceText = "";
     private volatile String gameExpectedText = "";
@@ -76,6 +77,10 @@ public class GameOneScreen implements Screen {
     private static final long CORRECT_GESTURE_COOLDOWN_MS = 1500L;  // Breathing time after correct gesture
     private volatile long lastReconnectAttemptMs = 0L;
     private static final long RECONNECT_INTERVAL_MS = 2000L;
+    // Guards all pythonClient I/O to prevent frame-thread / render-thread cross-reads.
+    private final Object clientLock = new Object();
+    private volatile JsonValue pendingSequence = null;
+    private volatile long pendingSequenceTime = 0L;
     private static final float HUD_RIGHT_WIDTH = 460f;
     private static final float HUD_TOP_PAD = 340f;
     private static final float LOADING_TOP_PAD = 160f;
@@ -153,8 +158,35 @@ public class GameOneScreen implements Screen {
         Gdx.gl.glClearColor(0.08f, 0.08f, 0.12f, 1f);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
+        // Tick timer locally every frame for smooth, lag-free countdown display.
+        // Network sync (checkTimerStatus) corrects any drift every 100 ms.
+        if (gameLogicReady && gameStarted && timeRemaining > 0f) {
+            timeRemaining = Math.max(0f, timeRemaining - delta);
+        }
+
         updateCameraTexture();
         checkTimerStatus();
+        
+        // Apply pending sequence after cooldown period
+        if (pendingSequence != null) {
+            long now = System.currentTimeMillis();
+            if (now - pendingSequenceTime >= CORRECT_GESTURE_COOLDOWN_MS) {
+                gameSequenceText = "Sequence: " + formatSequence(pendingSequence);
+                updateSequenceIcons(pendingSequence);
+                roundStartTime = System.currentTimeMillis();
+                // Restore expected gesture to the first gesture of the new sequence.
+                if (pendingSequence.size > 0 && pendingSequence.get(0).isNumber()) {
+                    int firstId = pendingSequence.get(0).asInt();
+                    expectedGestureName = getGestureName(firstId);
+                    gameExpectedText = "Expected: " + (expectedGestureName != null ? getGestureDisplayName(firstId) : String.valueOf(firstId));
+                }
+                gameProgressText = "Progress: 0/" + pendingSequence.size;
+                pendingSequence = null;
+                pendingSequenceTime = 0L;
+                // Reset cooldown so player can immediately start new round
+                lastCorrectGestureTimeMs = 0L;
+            }
+        }
 
         updateHudText();
         if (loadingTable != null) {
@@ -320,6 +352,7 @@ public class GameOneScreen implements Screen {
         }
         if (timerLabel != null) {
             int timeInt = (int) Math.ceil(timeRemaining);
+            if (timeInt < 0) timeInt = 0;
             timerLabel.setText("Time: " + timeInt + "s");
             lockHudWidth(timerLabel);
         }
@@ -333,7 +366,7 @@ public class GameOneScreen implements Screen {
             lockHudWidth(accuracyLabel);
         }
         if (statusLabel != null) {
-            statusLabel.setText("");
+            statusLabel.setText(gameStatusMessage);
             lockHudWidth(statusLabel);
         }
         if (sequenceLabel != null) {
@@ -384,42 +417,56 @@ public class GameOneScreen implements Screen {
         lastTimerCheckMs = now;
         
         try {
-            pythonClient.connect(2000);
-            String response = pythonClient.sendRequest("game_state", "{}");
-            JsonValue json = jsonReader.parse(response);
-            if (json != null && json.getBoolean("ok", false)) {
-                JsonValue data = json.get("data");
-                if (data != null) {
-                    // Update time remaining
-                    float newTimeRemaining = data.getFloat("time_remaining", 15.0f);
-                    if (newTimeRemaining > timeRemaining + 5.0f) {
-                        // New round started (timer reset to 15)
-                        JsonValue seq = data.get("sequence");
-                        if (seq != null) {
-                            gameSequenceText = "Sequence: " + formatSequence(seq);
-                            updateSequenceIcons(seq);
+            synchronized (clientLock) {
+                pythonClient.connect(2000);
+                String response = pythonClient.sendRequest("game_state", "{}");
+                JsonValue json = jsonReader.parse(response);
+                if (json != null && json.getBoolean("ok", false)) {
+                    JsonValue data = json.get("data");
+                    if (data != null) {
+                        // Check for timeout (round failed due to time expiry)
+                        boolean timeoutOccurred = data.getBoolean("timeout_occurred", false);
+                        if (timeoutOccurred) {
+                            // Round failed - show message and update sequence
+                            gameStatusMessage = "Time's Up! Round Failed - Next round!";
+                            consecutiveCorrect = 0;
+                            comboMultiplier = 1.0f;
+                            JsonValue newSeq = data.get("sequence");
+                            if (newSeq != null) {
+                                gameSequenceText = "Sequence: " + formatSequence(newSeq);
+                                updateSequenceIcons(newSeq);
+                                roundStartTime = System.currentTimeMillis();
+                            }
+                            lastCorrectGestureTimeMs = 0L;  // Allow immediate input
                         }
-                    }
-                    timeRemaining = newTimeRemaining;
-                    
-                    // Update expected gesture
-                    JsonValue expected = data.get("expected");
-                    if (expected != null && expected.isNumber()) {
-                        int expectedId = expected.asInt();
-                        expectedGestureName = getGestureName(expectedId);
-                        gameExpectedText = "Expected: " + (expectedGestureName != null ? getGestureDisplayName(expectedId) : String.valueOf(expectedId));
-                    }
-                    
-                    // Update progress
-                    JsonValue progress = data.get("progress");
-                    if (progress != null && progress.isArray() && progress.size >= 2) {
-                        gameProgressText = "Progress: " + progress.get(0).asString() + "/" + progress.get(1).asString();
+                        
+                        // Sync time remaining from server (corrects local drift).
+                        // Only overwrite if server value is meaningfully different to avoid
+                        // re-introducing the jumpy display that the local delta-tick fixes.
+                        float serverTime = data.getFloat("time_remaining", timeRemaining);
+                        if (Math.abs(serverTime - timeRemaining) > 0.5f) {
+                            timeRemaining = serverTime;
+                        }
+                        
+                        // Update expected gesture
+                        JsonValue expected = data.get("expected");
+                        if (expected != null && expected.isNumber()) {
+                            int expectedId = expected.asInt();
+                            expectedGestureName = getGestureName(expectedId);
+                            gameExpectedText = "Expected: " + (expectedGestureName != null ? getGestureDisplayName(expectedId) : String.valueOf(expectedId));
+                        }
+                        
+                        // Update progress
+                        JsonValue progress = data.get("progress");
+                        if (progress != null && progress.isArray() && progress.size >= 2) {
+                            gameProgressText = "Progress: " + progress.get(0).asString() + "/" + progress.get(1).asString();
+                        }
                     }
                 }
             }
         } catch (Exception ignored) {
             gameLogicReady = false;
-            gameStatusMessage = buildBackendStatusMessage();
+            gameStatusMessage = "";
         }
     }
 
@@ -437,8 +484,11 @@ public class GameOneScreen implements Screen {
                             continue;
                         }
                     }
-                    pythonClient.connect(2000);
-                    String response = pythonClient.sendRequest("get_frame", "{\"camera_id\":0,\"quality\":60,\"draw_skeleton\":true}");
+                    String response;
+                    synchronized (clientLock) {
+                        pythonClient.connect(2000);
+                        response = pythonClient.sendRequest("get_frame", "{\"camera_id\":0,\"quality\":90,\"draw_skeleton\":true,\"max_width\":640,\"max_height\":480}");
+                    }
                     JsonValue json = jsonReader.parse(response);
                     if (json != null && json.getBoolean("ok", false)) {
                         JsonValue data = json.get("data");
@@ -495,7 +545,10 @@ public class GameOneScreen implements Screen {
 
         try {
             String payload = "{\"gesture_id\":" + gestureId + "}";
-            String response = pythonClient.sendRequest("game_input", payload);
+            String response;
+            synchronized (clientLock) {
+                response = pythonClient.sendRequest("game_input", payload);
+            }
             JsonValue json = jsonReader.parse(response);
             if (json != null && json.getBoolean("ok", false)) {
                 JsonValue gameData = json.get("data");
@@ -510,32 +563,45 @@ public class GameOneScreen implements Screen {
                         timeRemaining = gameData.getFloat("time_remaining", 15.0f);
                     }
                     
-                    // Check for new sequence (round completed or timer expired)
-                    if (gameData.has("sequence")) {
-                        JsonValue newSeq = gameData.get("sequence");
-                        gameSequenceText = "Sequence: " + formatSequence(newSeq);
-                        updateSequenceIcons(newSeq);
-                        // Reset round start time when new sequence begins
-                        roundStartTime = System.currentTimeMillis();
-                    }
-                    
                     // Get correct status from result object
                     boolean isCorrect = false;
                     boolean isComplete = false;
                     boolean isMistake = false;
-                    boolean timeExpired = false;
                     if (result != null) {
                         isCorrect = result.getBoolean("valid", false);
                         isComplete = result.getBoolean("complete", false);
                         isMistake = result.getBoolean("mistake", false);
-                        timeExpired = result.getBoolean("time_expired", false);
                     }
                     
+                    // Check for new sequence (round completed successfully)
+                    if (gameData.has("sequence")) {
+                        JsonValue newSeq = gameData.get("sequence");
+                        
+                        // If round is complete, delay sequence update until cooldown ends
+                        if (isComplete) {
+                            // Clear stale expected gesture immediately so wrong icon isn't shown.
+                            expectedGestureName = null;
+                            gameExpectedText = "Waiting for next round...";
+                            // Store the new sequence to apply after cooldown
+                            pendingSequence = newSeq;
+                            pendingSequenceTime = System.currentTimeMillis();
+                        } else {
+                            // Not complete, update immediately (shouldn't normally happen)
+                            gameSequenceText = "Sequence: " + formatSequence(newSeq);
+                            updateSequenceIcons(newSeq);
+                            roundStartTime = System.currentTimeMillis();
+                        }
+                    }
+                    
+                    // Update expected gesture only when sequence is still in progress.
+                    // Skip this update if isComplete (expected = null from server, handled above).
+                    if (!isComplete) {
                     // Update expected gesture
                     if (expected != null && expected.isNumber()) {
                         int expectedId = expected.asInt();
                         expectedGestureName = getGestureName(expectedId);
                         gameExpectedText = "Expected: " + (expectedGestureName != null ? getGestureDisplayName(expectedId) : String.valueOf(expectedId));
+                    }
                     }
                     
                     // Update progress
@@ -543,62 +609,53 @@ public class GameOneScreen implements Screen {
                         gameProgressText = "Progress: " + progress.get(0).asString() + "/" + progress.get(1).asString();
                     }
                     
-                    // Handle time expired
-                    if (timeExpired) {
-                        gameStatusMessage = "Time's Up! Next round starting...";
-                        consecutiveCorrect = 0;
-                        comboMultiplier = 1.0f;
-                        // Allow immediate input for new round
-                        lastCorrectGestureTimeMs = 0L;
-                        return;
-                    }
-                    
                     // Handle mistake - allow mistakes with no penalty
                     if (isMistake) {
                         return;
                     }
                     
-                    // Update scoring for correct gestures
-                    totalGestures++;
-                    if (isCorrect) {
-                        correctGestures++;
-                        consecutiveCorrect++;
-                        
-                        // Set cooldown after correct gesture
-                        lastCorrectGestureTimeMs = System.currentTimeMillis();
-                        
-                        // Calculate combo multiplier
-                        if (consecutiveCorrect >= 10) {
-                            comboMultiplier = 3.0f;
-                        } else if (consecutiveCorrect >= 5) {
-                            comboMultiplier = 2.0f;
-                        } else if (consecutiveCorrect >= 3) {
-                            comboMultiplier = 1.5f;
-                        } else {
-                            comboMultiplier = 1.0f;
-                        }
-                        
-                        // Base points
-                        int points = (int)(100 * comboMultiplier);
-                        
-                        // Speed bonus (if responded quickly)
-                        long timeSinceStart = System.currentTimeMillis() - roundStartTime;
-                        if (timeSinceStart < 2000 && timeSinceStart > 0) {
-                            points += 50;
-                        }
-                        
-                        score += points;
-                        gameStatusMessage = "Correct! +" + points + " points";
-                        
-                        // Check for round completion
-                        if (isComplete) {
-                            gameStatusMessage = "Round Complete! +" + points + " points - Next round!";
-                            // Reset cooldown for new round
-                            lastCorrectGestureTimeMs = 0L;
-                        }
+                    // If gesture is wrong, ignore it (don't count, don't change sequence)
+                    if (!isCorrect) {
+                        // Just update display but don't change anything else
+                        return;
                     }
                     
-                    roundStartTime = System.currentTimeMillis();
+                    // Update scoring for correct gestures
+                    totalGestures++;
+                    correctGestures++;
+                    consecutiveCorrect++;
+                    
+                    // Set cooldown after correct gesture
+                    lastCorrectGestureTimeMs = System.currentTimeMillis();
+                    
+                    // Calculate combo multiplier
+                    if (consecutiveCorrect >= 10) {
+                        comboMultiplier = 3.0f;
+                    } else if (consecutiveCorrect >= 5) {
+                        comboMultiplier = 2.0f;
+                    } else if (consecutiveCorrect >= 3) {
+                        comboMultiplier = 1.5f;
+                    } else {
+                        comboMultiplier = 1.0f;
+                    }
+                    
+                    // Base points
+                    int points = (int)(100 * comboMultiplier);
+                    
+                    // Speed bonus (if responded quickly)
+                    long timeSinceStart = System.currentTimeMillis() - roundStartTime;
+                    if (timeSinceStart < 2000 && timeSinceStart > 0) {
+                        points += 50;
+                    }
+                    
+                    score += points;
+                    gameStatusMessage = "Correct! +" + points + " points";
+                    
+                    // Check for round completion
+                    if (isComplete) {
+                        gameStatusMessage = "Round Complete! +" + points + " points - Next round!";
+                        // Don't reset cooldown yet - let pending sequence be applied first
+                    }
                     
                     if (stats != null) {
                         // Check for level completion
@@ -622,49 +679,61 @@ public class GameOneScreen implements Screen {
             boolean ready = PythonBackendManager.waitForReady(8000);
             if (!ready) {
                 gameLogicReady = false;
-                gameStatusMessage = buildBackendStatusMessage();
+                //gameStatusMessage = buildBackendStatusMessage();
                 return;
             }
-            pythonClient.connect(2000);
-            String response = pythonClient.sendRequest("game_start", "{\"difficulty\":\"medium\"}");
-            JsonValue json = jsonReader.parse(response);
-            if (json != null && json.getBoolean("ok", false)) {
-                gameLogicReady = true;
-                gameStatusMessage = "Python game logic ready";
-                JsonValue data = json.get("data");
-                if (data != null) {
-                    // Get initial time remaining
-                    if (data.has("time_remaining")) {
-                        timeRemaining = data.getFloat("time_remaining", 15.0f);
+            synchronized (clientLock) {
+                pythonClient.connect(2000);
+
+            if (!gameStarted) {
+                // First time only: start a brand new game
+                String response = pythonClient.sendRequest("game_start", "{\"difficulty\":\"medium\"}");
+                JsonValue json = jsonReader.parse(response);
+                if (json != null && json.getBoolean("ok", false)) {
+                    gameLogicReady = true;
+                    gameStarted = true;
+                    JsonValue data = json.get("data");
+                    if (data != null) {
+                        // Get initial time remaining
+                        if (data.has("time_remaining")) {
+                            timeRemaining = data.getFloat("time_remaining", 15.0f);
+                        }
+                        JsonValue seq = data.get("sequence");
+                        gameSequenceText = "Sequence: " + formatSequence(seq);
+                        updateSequenceIcons(seq);
+                        JsonValue expected = data.get("expected");
+                        if (expected != null && expected.isNumber()) {
+                            int expectedId = expected.asInt();
+                            expectedGestureName = getGestureName(expectedId);
+                            gameExpectedText = "Expected: " + (expectedGestureName != null ? getGestureDisplayName(expectedId) : String.valueOf(expectedId));
+                        } else {
+                            expectedGestureName = null;
+                            gameExpectedText = "Expected: -";
+                        }
+                        JsonValue progress = data.get("progress");
+                        if (progress != null && progress.isArray() && progress.size >= 2) {
+                            gameProgressText = "Progress: " + progress.get(0).asString() + "/" + progress.get(1).asString();
+                        } else {
+                            gameProgressText = "Progress: -";
+                        }
                     }
-                    
-                    JsonValue seq = data.get("sequence");
-                    gameSequenceText = "Sequence: " + formatSequence(seq);
-                    updateSequenceIcons(seq);
-                    JsonValue expected = data.get("expected");
-                    if (expected != null && expected.isNumber()) {
-                        int expectedId = expected.asInt();
-                        expectedGestureName = getGestureName(expectedId);
-                        gameExpectedText = "Expected: " + (expectedGestureName != null ? getGestureDisplayName(expectedId) : String.valueOf(expectedId));
-                    } else {
-                        expectedGestureName = null;
-                        gameExpectedText = "Expected: -";
-                    }
-                    JsonValue progress = data.get("progress");
-                    if (progress != null && progress.isArray() && progress.size >= 2) {
-                        gameProgressText = "Progress: " + progress.get(0).asString() + "/" + progress.get(1).asString();
-                    } else {
-                        gameProgressText = "Progress: -";
-                    }
+                } else {
+                    gameLogicReady = false;
                 }
             } else {
-                gameLogicReady = false;
-                String error = json != null ? json.getString("error", "unknown_error") : "no_response";
-                gameStatusMessage = "Python game logic error: " + error;
+                // Reconnect: just ping the server - do NOT call game_start (that would reset the sequence)
+                String response = pythonClient.sendRequest("game_state", "{}");
+                JsonValue json = jsonReader.parse(response);
+                if (json != null && json.getBoolean("ok", false)) {
+                    gameLogicReady = true;
+                } else {
+                    gameLogicReady = false;
+                }
             }
+            } // end synchronized
         } catch (Exception e) {
             gameLogicReady = false;
-            gameStatusMessage = buildBackendStatusMessage();
+            gameStatusMessage = "";
         }
     }
 

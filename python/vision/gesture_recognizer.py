@@ -69,7 +69,9 @@ class GestureRecognizer:
         self.enable_smoothing = enable_smoothing
         self.previous_gesture = None
         self.consecutive_count = 0
-        self.stability_frames = 5 if enable_smoothing else 1  # Require 5 frames (~150ms at 30fps)
+        # 3 consecutive frames (~100 ms at 30 fps) is enough for a stable read;
+        # 5 was causing recognition to feel "frozen" after any brief confidence dip.
+        self.stability_frames = 3 if enable_smoothing else 1
         
         # Temporal smoothing buffer
         self.gesture_history = []  # Last N gestures
@@ -104,8 +106,10 @@ class GestureRecognizer:
         Returns True only after gesture is held for stability_frames.
         """
         if confidence <= self.confidence_threshold:
+            # Low confidence: decay the counter rather than resetting to 0.
+            # This prevents a single noisy frame from clearing all progress.
+            self.consecutive_count = max(0, self.consecutive_count - 1)
             self.previous_gesture = gesture_id
-            self.consecutive_count = 0
             return False
 
         if gesture_id == self.previous_gesture:

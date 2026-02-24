@@ -102,7 +102,7 @@ public class GameTwoScreen implements Screen {
         boolean alive;
         Rectangle bounds;
         float rotation;
-        static final float GRAVITY = -500f; // Pixels per second squared
+        static final float GRAVITY = -160f; // Pixels per second squared (slower so bugs stay in play longer)
         
         Bug(float x, float y, float velocityX, float velocityY, String animName) {
             this.x = x;
@@ -127,6 +127,28 @@ public class GameTwoScreen implements Screen {
             rotation = (float) Math.toDegrees(Math.atan2(velocityY, velocityX));
             
             bounds.set(x, y, BUG_SIZE, BUG_SIZE);
+        }
+
+        // Bounce off the given video-area walls (top, left, right only).
+        // Returns true if the bug has fallen below the bottom edge and should be removed.
+        boolean bounceAndCheckEscape(float vx, float vy, float vw, float vh) {
+            // Left wall
+            if (x < vx) {
+                x = vx;
+                velocityX = Math.abs(velocityX);
+            }
+            // Right wall
+            if (x + BUG_SIZE > vx + vw) {
+                x = vx + vw - BUG_SIZE;
+                velocityX = -Math.abs(velocityX);
+            }
+            // Top wall
+            if (y + BUG_SIZE > vy + vh) {
+                y = vy + vh - BUG_SIZE;
+                velocityY = -Math.abs(velocityY);
+            }
+            // Bottom edge — bug escaped
+            return y + BUG_SIZE < vy;
         }
         
         int getPointValue() {
@@ -381,13 +403,11 @@ public class GameTwoScreen implements Screen {
         for (int i = bugs.size - 1; i >= 0; i--) {
             Bug bug = bugs.get(i);
             bug.update(delta);
-            
-            // Remove bugs that went off video area (fell below or went to sides)
-            if (bug.y < videoY - BUG_SIZE || 
-                bug.x < videoX - BUG_SIZE || 
-                bug.x > videoX + videoWidth + BUG_SIZE) {
+
+            // Bounce off top / left / right video borders; escape only from the bottom.
+            boolean escaped = bug.bounceAndCheckEscape(videoX, videoY, videoWidth, videoHeight);
+            if (escaped) {
                 if (bug.alive) {
-                    // Bug escaped - penalty
                     bugsMissed++;
                     score = Math.max(0, score - 10);
                     comboCount = 0;
@@ -428,14 +448,12 @@ public class GameTwoScreen implements Screen {
     }
     
     private void checkHandBugCollisions() {
-        if (lastHandPos == null) {
-            return;
-        }
-        
-        float handX = lastHandPos[0];
-        float handY = lastHandPos[1];
-        float handRadius = 30f;
-        
+        // Use the sword sprite center as the hit point — the sword is the weapon, not the raw hand.
+        // swordX/swordY track a smoothed version of the hand already, so this is always valid.
+        float swordHitX = swordX;
+        float swordHitY = swordY;
+        float swordHitRadius = SWORD_SIZE / 2f; // 40 px — matches the visible sword sprite
+
         long currentTime = System.currentTimeMillis();
         boolean slicedAnyBug = false;
         
@@ -443,8 +461,14 @@ public class GameTwoScreen implements Screen {
             Bug bug = bugs.get(i);
             if (!bug.alive) continue;
             
-            // Check if hand is within bug bounds
-            if (bug.bounds.contains(handX, handY) || bug.bounds.contains(handX + handRadius, handY)) {
+            // Check if the sword hit circle overlaps the bug rectangle.
+            // Clamp sword center to the bug rect, then test distance vs. radius.
+            float nearestX = Math.max(bug.bounds.x, Math.min(swordHitX, bug.bounds.x + bug.bounds.width));
+            float nearestY = Math.max(bug.bounds.y, Math.min(swordHitY, bug.bounds.y + bug.bounds.height));
+            float dx = swordHitX - nearestX;
+            float dy = swordHitY - nearestY;
+            boolean hit = (dx * dx + dy * dy) <= (swordHitRadius * swordHitRadius);
+            if (hit) {
                 bug.alive = false;
                 slicedAnyBug = true;
                 bugsSliced++;
@@ -492,26 +516,12 @@ public class GameTwoScreen implements Screen {
         // Spawn at edges of the video area (bugs fly INTO the video area)
         float x, y, velocityX, velocityY;
         
-        if (MathUtils.randomBoolean()) {
-            // Spawn from bottom edge of video area
-            x = MathUtils.random(videoX, videoX + videoWidth - BUG_SIZE);
-            y = videoY;
-            velocityX = MathUtils.random(-200f, 200f);
-            velocityY = MathUtils.random(600f, 900f);
-        } else {
-            // Spawn from sides of video area
-            if (MathUtils.randomBoolean()) {
-                // Left edge of video
-                x = videoX;
-                velocityX = MathUtils.random(200f, 400f);
-            } else {
-                // Right edge of video
-                x = videoX + videoWidth - BUG_SIZE;
-                velocityX = MathUtils.random(-400f, -200f);
-            }
-            y = MathUtils.random(videoY, videoY + videoHeight * 0.5f);
-            velocityY = MathUtils.random(500f, 800f);
-        }
+        // All bugs spawn from the bottom edge and bounce inside the video area.
+        // Velocities are intentionally lower than before so they move at a comfortable pace.
+        x = MathUtils.random(videoX, videoX + videoWidth - BUG_SIZE);
+        y = videoY;
+        velocityX = MathUtils.random(-150f, 150f);
+        velocityY = MathUtils.random(280f, 420f);
         
         int bugTypeIndex = MathUtils.random(0, 3); // Random bug type: 0=purple, 1=green, 2=blue, 3=red
         String[] bugTypes = {"purple", "green", "blue", "red"};

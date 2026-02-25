@@ -6,7 +6,10 @@ import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.BitmapFont;
+import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
+import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.scenes.scene2d.Stage;
 import com.badlogic.gdx.scenes.scene2d.ui.ImageButton;
 import com.badlogic.gdx.scenes.scene2d.ui.Skin;
@@ -71,6 +74,12 @@ public class GameOneScreen implements Screen {
     private volatile boolean cameraReady = false;
     private volatile String loadingMessage = "Initializing camera...";
     private volatile float timeRemaining = 15.0f;
+    // Overall 2-minute game timer
+    private float gameTimeRemaining;
+    private static final float GAME_DURATION = 120f; // 2 minutes
+    private boolean overallGameOver = false;
+    private BitmapFont overlayFont;
+    private ShapeRenderer shapeRenderer;
     private volatile long lastTimerCheckMs = 0L;
     private static final long TIMER_CHECK_INTERVAL_MS = 100L;  // Check timer every 100ms
     private volatile long lastCorrectGestureTimeMs = 0L;
@@ -126,6 +135,12 @@ public class GameOneScreen implements Screen {
             SpriteFontManager.load(UIHelper.DEFAULT_SPRITE_FONT, "ui/ctm.uiskin.png");
         }
 
+        gameTimeRemaining = GAME_DURATION;
+        overallGameOver = false;
+        overlayFont = new BitmapFont();
+        shapeRenderer = new ShapeRenderer();
+        shapeRenderer.setAutoShapeType(true);
+
         // Load gesture textures
         gestureTextures = new java.util.HashMap<>();
         gestureTextures.put("fist", Assets.manager.get("game/gesture/fist.png", Texture.class));
@@ -158,9 +173,17 @@ public class GameOneScreen implements Screen {
         Gdx.gl.glClearColor(0.08f, 0.08f, 0.12f, 1f);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
+        // Tick overall game timer
+        if (gameStarted && !overallGameOver) {
+            gameTimeRemaining = Math.max(0f, gameTimeRemaining - delta);
+            if (gameTimeRemaining <= 0f) {
+                overallGameOver = true;
+            }
+        }
+
         // Tick timer locally every frame for smooth, lag-free countdown display.
         // Network sync (checkTimerStatus) corrects any drift every 100 ms.
-        if (gameLogicReady && gameStarted && timeRemaining > 0f) {
+        if (gameLogicReady && gameStarted && timeRemaining > 0f && !overallGameOver) {
             timeRemaining = Math.max(0f, timeRemaining - delta);
         }
 
@@ -219,15 +242,69 @@ public class GameOneScreen implements Screen {
         }
         
         // Draw expected gesture image
-        if (expectedGestureName != null && gestureTextures.containsKey(expectedGestureName.toLowerCase())) {
+        if (!overallGameOver && expectedGestureName != null && gestureTextures.containsKey(expectedGestureName.toLowerCase())) {
             Texture gestureTexture = gestureTextures.get(expectedGestureName.toLowerCase());
             float gestureSize = 256f;
             float gestureX = Gdx.graphics.getWidth() - gestureSize - 50f;
             float gestureY = Gdx.graphics.getHeight() - gestureSize - 50f;
             batch.draw(gestureTexture, gestureX, gestureY, gestureSize, gestureSize);
         }
-        
+
+        // Draw overall game countdown timer at top-center
+        int gameTimeMins = (int)(gameTimeRemaining / 60);
+        int gameTimeSecs = (int)(gameTimeRemaining % 60);
+        String gameTimerText = String.format("%d:%02d", gameTimeMins, gameTimeSecs);
+        overlayFont.getData().setScale(2.5f);
+        if (gameTimeRemaining <= 30f) {
+            overlayFont.setColor(1f, 0.2f, 0.2f, 1f);
+        } else {
+            overlayFont.setColor(1f, 1f, 1f, 1f);
+        }
+        GlyphLayout gameTimerLayout = new GlyphLayout(overlayFont, gameTimerText);
+        overlayFont.draw(batch, gameTimerText,
+            Gdx.graphics.getWidth() / 2f - gameTimerLayout.width / 2f,
+            Gdx.graphics.getHeight() - 20f);
+        overlayFont.setColor(1f, 1f, 1f, 1f);
+
         batch.end();
+
+        // Draw game over overlay when total time is up
+        if (overallGameOver) {
+            Gdx.gl.glEnable(GL20.GL_BLEND);
+            shapeRenderer.setProjectionMatrix(batch.getProjectionMatrix());
+            shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
+            shapeRenderer.setColor(0f, 0f, 0f, 0.78f);
+            shapeRenderer.rect(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+            shapeRenderer.end();
+            Gdx.gl.glDisable(GL20.GL_BLEND);
+
+            batch.begin();
+            GlyphLayout gl = new GlyphLayout();
+            overlayFont.getData().setScale(3.5f);
+            overlayFont.setColor(1f, 0.85f, 0.2f, 1f);
+            gl.setText(overlayFont, "TIME'S UP!");
+            overlayFont.draw(batch, "TIME'S UP!",
+                Gdx.graphics.getWidth() / 2f - gl.width / 2f,
+                Gdx.graphics.getHeight() / 2f + 120f);
+
+            overlayFont.getData().setScale(2.0f);
+            overlayFont.setColor(1f, 1f, 1f, 1f);
+            gl.setText(overlayFont, "Final Score: " + score);
+            overlayFont.draw(batch, "Final Score: " + score,
+                Gdx.graphics.getWidth() / 2f - gl.width / 2f,
+                Gdx.graphics.getHeight() / 2f + 40f);
+
+            overlayFont.getData().setScale(1.2f);
+            overlayFont.setColor(0.8f, 0.8f, 0.8f, 1f);
+            gl.setText(overlayFont, "Use the back button to return to menu");
+            overlayFont.draw(batch, "Use the back button to return to menu",
+                Gdx.graphics.getWidth() / 2f - gl.width / 2f,
+                Gdx.graphics.getHeight() / 2f - 60f);
+
+            overlayFont.getData().setScale(1.0f);
+            overlayFont.setColor(1f, 1f, 1f, 1f);
+            batch.end();
+        }
 
         stage.act(delta);
         stage.draw();
@@ -264,6 +341,8 @@ public class GameOneScreen implements Screen {
         try { if (stage != null) stage.dispose(); } catch (Exception ignored) {}
         try { if (cameraTexture != null) cameraTexture.dispose(); } catch (Exception ignored) {}
         try { if (pythonClient != null) pythonClient.close(); } catch (Exception ignored) {}
+        try { if (overlayFont != null) overlayFont.dispose(); } catch (Exception ignored) {}
+        try { if (shapeRenderer != null) shapeRenderer.dispose(); } catch (Exception ignored) {}
         PythonBackendManager.stopServer();
     }
 
@@ -401,6 +480,7 @@ public class GameOneScreen implements Screen {
     }
     
     private void checkTimerStatus() {
+        if (overallGameOver) return;
         if (!gameLogicReady) {
             long now = System.currentTimeMillis();
             if (now - lastReconnectAttemptMs >= RECONNECT_INTERVAL_MS) {

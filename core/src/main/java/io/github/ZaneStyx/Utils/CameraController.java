@@ -33,7 +33,7 @@ public class CameraController {
     private final Vector2 prevTargetPos = new Vector2();
 
     // Zoom
-    private float zoom = 1f;
+    @SuppressWarnings("unused")private float zoom = 1f;
     private float targetZoom = 1f;
     private float zoomSmooth = 2f;
 

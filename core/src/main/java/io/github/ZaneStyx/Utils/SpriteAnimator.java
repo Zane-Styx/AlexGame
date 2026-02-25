@@ -29,7 +29,7 @@ public class SpriteAnimator {
     // optional sprite sheet (if constructed with a tiled sheet)
     private Texture baseTexture;
     private TextureRegion[][] splitRegions;
-    private int rows = 0, cols = 0;
+    @SuppressWarnings("unused")private int rows = 0, cols = 0;
 
     public SpriteAnimator() {
     }

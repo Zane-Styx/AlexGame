@@ -7,6 +7,7 @@ import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
+import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.math.MathUtils;
@@ -62,7 +63,24 @@ public class GameTwoScreen implements Screen {
     private int comboCount;
     private float comboMultiplier;
     private static final long COMBO_WINDOW_MS = 2000;
-    
+
+    // Time limit
+    private float gameTimeRemaining;
+    private static final float GAME_DURATION = 120f; // 2 minutes
+    private boolean gameOver;
+
+    // Cat obstacles — avoid hitting them (penalty if hit)
+    private Array<Cat> cats;
+    private SpriteAnimator catAnimator;
+    private float catSpawnTimer;
+    private float catSpawnInterval;
+    private static final float CAT_SPAWN_MIN = 8f;
+    private static final float CAT_SPAWN_MAX = 15f;
+    private static final float CAT_SIZE = 100f;
+    private static final int CAT_HIT_PENALTY = 30;
+    private String catHitMessage = "";
+    private float catHitFlashTimer = 0f;
+
     // Hand tracking and sword
     private Texture swordTexture;
     private com.badlogic.gdx.graphics.g2d.TextureRegion swordRegion;
@@ -162,6 +180,45 @@ public class GameTwoScreen implements Screen {
         }
     }
 
+    // Cat inner class — 4 types (rows 0-3), 2 frames each (col 0 = jumping up, col 1 = falling)
+    private static class Cat {
+        float x, y;
+        float velocityX, velocityY;
+        int catType; // 0-3, maps to row in sprite sheet
+        boolean alive;
+        Rectangle bounds;
+        static final float GRAVITY = -180f;
+
+        Cat(float x, float y, float velocityX, float velocityY, int catType) {
+            this.x = x;
+            this.y = y;
+            this.velocityX = velocityX;
+            this.velocityY = velocityY;
+            this.catType = catType;
+            this.alive = true;
+            this.bounds = new Rectangle(x, y, CAT_SIZE, CAT_SIZE);
+        }
+
+        void update(float delta) {
+            velocityY += GRAVITY * delta;
+            x += velocityX * delta;
+            y += velocityY * delta;
+            bounds.set(x, y, CAT_SIZE, CAT_SIZE);
+        }
+
+        boolean bounceAndCheckEscape(float vx, float vy, float vw, float vh) {
+            if (x < vx) { x = vx; velocityX = Math.abs(velocityX); }
+            if (x + CAT_SIZE > vx + vw) { x = vx + vw - CAT_SIZE; velocityX = -Math.abs(velocityX); }
+            if (y + CAT_SIZE > vy + vh) { y = vy + vh - CAT_SIZE; velocityY = -Math.abs(velocityY); }
+            return y + CAT_SIZE < vy;
+        }
+
+        // Returns the correct animation name based on current vertical direction
+        String getAnimName() {
+            return "cat" + catType + (velocityY >= 0f ? "_up" : "_down");
+        }
+    }
+
     @Override
     public void show() {
         batch = new SpriteBatch();
@@ -203,6 +260,21 @@ public class GameTwoScreen implements Screen {
         lastSliceTime = 0;
         comboCount = 0;
         comboMultiplier = 1.0f;
+
+        // Initialize cats (avoid-them obstacles)
+        cats = new Array<>();
+        catAnimator = new SpriteAnimator("game/cats_jump.png", 4, 2);
+        // 4 rows (cat types), 2 cols: col 0 = jumping up, col 1 = falling
+        for (int r = 0; r < 4; r++) {
+            catAnimator.addAnimation("cat" + r + "_up",   r, 0, 1, 0.1f, false);
+            catAnimator.addAnimation("cat" + r + "_down", r, 1, 1, 0.1f, false);
+        }
+        catSpawnTimer = 0f;
+        catSpawnInterval = MathUtils.random(CAT_SPAWN_MIN, CAT_SPAWN_MAX);
+
+        // Initialize time limit
+        gameTimeRemaining = GAME_DURATION;
+        gameOver = false;
 
         // Create back button in top-left corner
         Table buttonTable = new Table();
@@ -277,6 +349,19 @@ public class GameTwoScreen implements Screen {
                 }
             }
         }
+
+        // Draw cats (avoid hitting them!)
+        for (Cat cat : cats) {
+            if (cat.alive) {
+                String catAnim = cat.getAnimName();
+                catAnimator.play(catAnim, false);
+                catAnimator.update(0.016f);
+                com.badlogic.gdx.graphics.g2d.TextureRegion catFrame = catAnimator.getCurrentFrameRegion();
+                if (catFrame != null) {
+                    batch.draw(catFrame, cat.x, cat.y, CAT_SIZE / 2f, CAT_SIZE / 2f, CAT_SIZE, CAT_SIZE, 1f, 1f, 0f);
+                }
+            }
+        }
         batch.end();
 
         // Draw hand trail and sword with single ShapeRenderer pass
@@ -338,8 +423,66 @@ public class GameTwoScreen implements Screen {
         }
         font.getData().setScale(1.2f);
         font.draw(batch, "Sliced: " + bugsSliced + " | Missed: " + bugsMissed, 20, screenHeight - 200);
+
+        // Draw cat-hit penalty flash
+        if (catHitFlashTimer > 0f) {
+            font.getData().setScale(1.8f);
+            font.setColor(1f, 0.3f, 0.3f, catHitFlashTimer);
+            font.draw(batch, catHitMessage, 20, screenHeight - 240);
+            font.setColor(1f, 1f, 1f, 1f);
+        }
+
+        // Draw countdown timer at top-center
+        int timeMins = (int)(gameTimeRemaining / 60);
+        int timeSecs = (int)(gameTimeRemaining % 60);
+        String timerText = String.format("%d:%02d", timeMins, timeSecs);
+        font.getData().setScale(2.5f);
+        if (gameTimeRemaining <= 30f) {
+            font.setColor(1f, 0.2f, 0.2f, 1f);
+        } else {
+            font.setColor(1f, 1f, 1f, 1f);
+        }
+        GlyphLayout timerLayout = new GlyphLayout(font, timerText);
+        font.draw(batch, timerText, screenWidth / 2f - timerLayout.width / 2f, screenHeight - 20f);
+        font.setColor(1f, 1f, 1f, 1f);
         font.getData().setScale(1.0f);
         batch.end();
+
+        // Draw game over overlay when time is up
+        if (gameOver) {
+            Gdx.gl.glEnable(GL20.GL_BLEND);
+            shapeRenderer.setProjectionMatrix(batch.getProjectionMatrix());
+            shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
+            shapeRenderer.setColor(0f, 0f, 0f, 0.78f);
+            shapeRenderer.rect(0, 0, screenWidth, screenHeight);
+            shapeRenderer.end();
+            Gdx.gl.glDisable(GL20.GL_BLEND);
+
+            batch.begin();
+            GlyphLayout gl = new GlyphLayout();
+            font.getData().setScale(3.5f);
+            font.setColor(1f, 0.85f, 0.2f, 1f);
+            gl.setText(font, "TIME'S UP!");
+            font.draw(batch, "TIME'S UP!", screenWidth / 2f - gl.width / 2f, screenHeight / 2f + 120f);
+
+            font.getData().setScale(2.0f);
+            font.setColor(1f, 1f, 1f, 1f);
+            gl.setText(font, "Final Score: " + score);
+            font.draw(batch, "Final Score: " + score, screenWidth / 2f - gl.width / 2f, screenHeight / 2f + 40f);
+
+            font.getData().setScale(1.5f);
+            gl.setText(font, "High Score: " + highScore);
+            font.draw(batch, "High Score: " + highScore, screenWidth / 2f - gl.width / 2f, screenHeight / 2f - 20f);
+
+            font.getData().setScale(1.2f);
+            font.setColor(0.8f, 0.8f, 0.8f, 1f);
+            gl.setText(font, "Use the back button to return to menu");
+            font.draw(batch, "Use the back button to return to menu", screenWidth / 2f - gl.width / 2f, screenHeight / 2f - 90f);
+
+            font.getData().setScale(1.0f);
+            font.setColor(1f, 1f, 1f, 1f);
+            batch.end();
+        }
 
         stage.act(delta);
         stage.draw();
@@ -385,6 +528,7 @@ public class GameTwoScreen implements Screen {
         try { if (swordTexture != null) swordTexture.dispose(); } catch (Exception ignored) {}
         try { if (cameraTexture != null) cameraTexture.dispose(); } catch (Exception ignored) {}
         try { if (bugAnimator != null) bugAnimator.dispose(); } catch (Exception ignored) {}
+        try { if (catAnimator != null) catAnimator.dispose(); } catch (Exception ignored) {}
         try { if (shapeRenderer != null) shapeRenderer.dispose(); } catch (Exception ignored) {}
         try { if (batch != null) batch.dispose(); } catch (Exception ignored) {}
         try { if (font != null) font.dispose(); } catch (Exception ignored) {}
@@ -392,6 +536,21 @@ public class GameTwoScreen implements Screen {
     }
     
     private void updateGame(float delta) {
+        // Count down the game timer
+        if (!gameOver) {
+            gameTimeRemaining -= delta;
+            if (gameTimeRemaining <= 0f) {
+                gameTimeRemaining = 0f;
+                gameOver = true;
+            }
+        }
+        if (gameOver) return;
+
+        // Decrement cat-hit flash timer
+        if (catHitFlashTimer > 0f) {
+            catHitFlashTimer = Math.max(0f, catHitFlashTimer - delta);
+        }
+
         // Spawn new bugs
         spawnTimer += delta;
         if (spawnTimer >= SPAWN_INTERVAL) {
@@ -433,6 +592,27 @@ public class GameTwoScreen implements Screen {
         
         // Check for hand collision with bugs
         checkHandBugCollisions();
+
+        // Spawn cats infrequently (every 8–15 seconds, max 2 on screen)
+        catSpawnTimer += delta;
+        if (catSpawnTimer >= catSpawnInterval && cats.size < 2) {
+            catSpawnTimer = 0f;
+            catSpawnInterval = MathUtils.random(CAT_SPAWN_MIN, CAT_SPAWN_MAX);
+            spawnCat();
+        }
+
+        // Update cats
+        for (int i = cats.size - 1; i >= 0; i--) {
+            Cat cat = cats.get(i);
+            cat.update(delta);
+            boolean escaped = cat.bounceAndCheckEscape(videoX, videoY, videoWidth, videoHeight);
+            if (escaped) {
+                cats.removeIndex(i);
+            }
+        }
+
+        // Check for hand collision with cats (penalty!)
+        checkHandCatCollisions();
     }
     
     private float lerp(float current, float target, float factor) {
@@ -512,6 +692,42 @@ public class GameTwoScreen implements Screen {
         }
     }
     
+    private void checkHandCatCollisions() {
+        float swordHitX = swordX;
+        float swordHitY = swordY;
+        float swordHitRadius = SWORD_SIZE / 2f;
+
+        for (int i = cats.size - 1; i >= 0; i--) {
+            Cat cat = cats.get(i);
+            if (!cat.alive) continue;
+
+            float nearestX = Math.max(cat.bounds.x, Math.min(swordHitX, cat.bounds.x + cat.bounds.width));
+            float nearestY = Math.max(cat.bounds.y, Math.min(swordHitY, cat.bounds.y + cat.bounds.height));
+            float dx = swordHitX - nearestX;
+            float dy = swordHitY - nearestY;
+            boolean hit = (dx * dx + dy * dy) <= (swordHitRadius * swordHitRadius);
+            if (hit) {
+                cat.alive = false;
+                score = Math.max(0, score - CAT_HIT_PENALTY);
+                comboCount = 0;
+                comboMultiplier = 1.0f;
+                catHitMessage = "CAT! -" + CAT_HIT_PENALTY + " pts";
+                catHitFlashTimer = 2.0f; // show for 2 seconds
+                cats.removeIndex(i);
+            }
+        }
+    }
+
+    private void spawnCat() {
+        // Cats spawn from the bottom edge and jump up, same arc as bugs
+        float x = MathUtils.random(videoX, videoX + videoWidth - CAT_SIZE);
+        float y = videoY;
+        float velocityX = MathUtils.random(-100f, 100f);
+        float velocityY = MathUtils.random(260f, 380f);
+        int catType = MathUtils.random(0, 3); // 4 cat types (rows 0-3)
+        cats.add(new Cat(x, y, velocityX, velocityY, catType));
+    }
+
     private void spawnBug() {
         // Spawn at edges of the video area (bugs fly INTO the video area)
         float x, y, velocityX, velocityY;
